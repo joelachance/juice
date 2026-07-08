@@ -1,0 +1,43 @@
+{
+  "name": "@juice/sdk",
+  "version": "0.1.0",
+  "description": "Minimal agent secrets management backed by local .env files and AWS Secrets Manager.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "bin": {
+    "juice": "./dist/src/cli/main.js"
+  },
+  "exports": {
+    ".": "./dist/src/sdk/index.js",
+    "./api": "./dist/src/api/server.js"
+  },
+  "files": [
+    "dist/src",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "cdk": "cdk",
+    "cdk:deploy": "cdk deploy",
+    "cdk:synth": "cdk synth",
+    "dev": "npm run build && node scripts/run-api-local.mjs",
+    "test:api-local": "npm run build && node scripts/test-api-local.mjs",
+    "start:api": "node dist/src/api/main.js",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "check:licenses": "node scripts/check-licenses.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.840.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "aws-cdk": "^2.1129.0",
+    "aws-cdk-lib": "^2.261.0",
+    "constructs": "^10.6.0",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

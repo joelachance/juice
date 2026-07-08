@@ -1,0 +1,8 @@
+{
+  "app": "npm run build && node dist/infra/app.js",
+  "context": {
+    "juiceApiDomainName": "",
+    "juiceHostedZoneId": "",
+    "juiceHostedZoneName": ""
+  }
+}

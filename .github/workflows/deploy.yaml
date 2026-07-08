@@ -1,0 +1,52 @@
+name: Deploy Juice API
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Check dependency licenses
+        run: npm run check:licenses
+
+      - name: Build Docker image
+        run: docker build --build-arg JUICE_VERSION_COMMIT=${{ github.sha }} -t juice-api:${{ github.sha }} .
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Deploy Fargate stack
+        run: >
+          npx cdk deploy JuiceApiStack
+          --require-approval never
+          -c versionCommit=${{ github.sha }}
+          --parameters GitHubClientId=${{ secrets.JUICE_GITHUB_CLIENT_ID }}
+          --parameters VersionCommit=${{ github.sha }}

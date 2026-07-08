@@ -1,0 +1,8 @@
+node_modules/
+dist/
+cdk.out/
+.env
+.env.*
+.juice/
+.DS_Store
+cdk.context.json
