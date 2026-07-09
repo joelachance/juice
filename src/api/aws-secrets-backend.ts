@@ -1,12 +1,14 @@
 import {
   CreateSecretCommand,
+  DeleteSecretCommand,
   DescribeSecretCommand,
   GetSecretValueCommand,
+  ListSecretsCommand,
   PutSecretValueCommand,
   ResourceNotFoundException,
   SecretsManagerClient
 } from "@aws-sdk/client-secrets-manager";
-import type { SecretRef, SecretsBackend } from "./secrets-backend.js";
+import type { SecretListRef, SecretRef, SecretsBackend } from "./secrets-backend.js";
 
 export class AwsSecretsManagerBackend implements SecretsBackend {
   readonly client: SecretsManagerClient;
@@ -35,10 +37,52 @@ export class AwsSecretsManagerBackend implements SecretsBackend {
       await this.client.send(new CreateSecretCommand({ Name: name, SecretString: value }));
     }
   }
+
+  /**
+   * ListSecrets cannot be IAM-scoped by name prefix. Callers must only pass a
+   * ref derived from the authenticated principal; this method still filters to
+   * that exact prefix so account-wide enumeration cannot leak other tenants.
+   */
+  async listKeys(ref: SecretListRef): Promise<string[]> {
+    const prefix = secretPrefix(ref);
+    const keys = new Set<string>();
+    let nextToken: string | undefined;
+    do {
+      const response = await this.client.send(new ListSecretsCommand({
+        MaxResults: 100,
+        NextToken: nextToken,
+        Filters: [{ Key: "name", Values: [prefix] }]
+      }));
+      for (const secret of response.SecretList ?? []) {
+        const name = secret.Name;
+        if (!name || !name.startsWith(prefix)) continue;
+        const key = name.slice(prefix.length);
+        if (key && !key.includes("/")) keys.add(decodeURIComponent(key));
+      }
+      nextToken = response.NextToken;
+    } while (nextToken);
+    return [...keys].sort();
+  }
+
+  async deleteSecret(ref: SecretRef): Promise<void> {
+    try {
+      await this.client.send(new DeleteSecretCommand({
+        SecretId: secretName(ref),
+        RecoveryWindowInDays: 7
+      }));
+    } catch (error) {
+      if (isNotFound(error)) return;
+      throw error;
+    }
+  }
 }
 
 export function secretName(ref: SecretRef): string {
-  return `/juice/users/${segment(ref.userId)}/projects/${segment(ref.project)}/envs/${segment(ref.env)}/secrets/${segment(ref.key)}`;
+  return `${secretPrefix(ref)}${segment(ref.key)}`;
+}
+
+export function secretPrefix(ref: SecretListRef): string {
+  return `/juice/users/${segment(ref.userId)}/projects/${segment(ref.project)}/envs/${segment(ref.env)}/secrets/`;
 }
 
 function segment(value: string): string {

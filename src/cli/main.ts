@@ -267,38 +267,78 @@ async function getSecret(key: string, args: Args): Promise<number> {
 async function listSecrets(args: Args): Promise<number> {
   const env = envWithOverrides(args);
   const mode = resolveSecretMode(args, env);
-  if (mode === "remote") {
-    console.error("Remote list is not available yet; use local mode or omit --remote.");
+  const { project, root } = resolveProject(process.cwd(), env);
+  const envName = args.env || resolveJuiceEnv(env);
+
+  if (mode === "local") {
+    const keys = Object.keys(readDotEnv(join(root, ".env"))).sort();
+    for (const key of keys) console.log(key);
+    return 0;
+  }
+
+  const token = getToken(env);
+  if (!token) {
+    console.error("Run `juice auth login` or set JUICE_TOKEN before listing remote secrets.");
     return 1;
   }
-  const { root } = resolveProject(process.cwd(), env);
-  const keys = Object.keys(readDotEnv(join(root, ".env"))).sort();
-  for (const key of keys) console.log(key);
-  return 0;
+  try {
+    const path = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets`;
+    const response = await requestJson<{ keys: string[] }>(`${apiBase(env)}${path}`, {
+      method: "GET",
+      token
+    });
+    for (const key of [...response.keys].sort()) console.log(key);
+    return 0;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
 }
 
 async function unsetSecret(key: string, args: Args): Promise<number> {
   const env = envWithOverrides(args);
   const mode = resolveSecretMode(args, env);
-  if (mode === "remote") {
-    console.error("Remote unset is not available yet; use local mode or omit --remote.");
-    return 1;
-  }
-  const { root } = resolveProject(process.cwd(), env);
-  const envFile = join(root, ".env");
-  const existing = readDotEnv(envFile);
-  if (!(key in existing)) {
-    console.log(`${key} is not set.`);
+  const { project, root } = resolveProject(process.cwd(), env);
+  const envName = args.env || resolveJuiceEnv(env);
+
+  if (mode === "local") {
+    const envFile = join(root, ".env");
+    const existing = readDotEnv(envFile);
+    if (!(key in existing)) {
+      console.log(`${key} is not set.`);
+      return 0;
+    }
+    if (!(await confirm(`Unset ${key} from .env?`, args.yes))) {
+      console.error("Cancelled.");
+      return 1;
+    }
+    removeDotEnvKey(envFile, key);
+    recordEnvFingerprint(root, envFile);
+    console.log(`Unset ${key}.`);
     return 0;
   }
-  if (!(await confirm(`Unset ${key} from .env?`, args.yes))) {
+
+  const token = getToken(env);
+  if (!token) {
+    console.error("Run `juice auth login` or set JUICE_TOKEN before unsetting remote secrets.");
+    return 1;
+  }
+  if (!(await confirm(`Unset remote secret ${key} for ${project}/${envName}?`, args.yes))) {
     console.error("Cancelled.");
     return 1;
   }
-  removeDotEnvKey(envFile, key);
-  recordEnvFingerprint(root, envFile);
-  console.log(`Unset ${key}.`);
-  return 0;
+  try {
+    const path = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets/${encodeURIComponent(key)}`;
+    await requestJson(`${apiBase(env)}${path}`, {
+      method: "DELETE",
+      token
+    });
+    console.log(`Unset ${key}.`);
+    return 0;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
 }
 
 async function runWithSecrets(args: Args): Promise<number> {
@@ -308,17 +348,42 @@ async function runWithSecrets(args: Args): Promise<number> {
   }
   const env = envWithOverrides(args);
   const mode = resolveSecretMode(args, env);
-  if (mode === "remote") {
-    console.error("Remote run is not available yet; use local mode or omit --remote.");
-    return 1;
-  }
-
-  const { root } = resolveProject(process.cwd(), env);
+  const { project, root } = resolveProject(process.cwd(), env);
+  const envName = args.env || resolveJuiceEnv(env);
   const childEnv = { ...env };
   const originalKeys = new Set(Object.keys(env));
-  for (const [key, value] of Object.entries(readDotEnv(join(root, ".env")))) {
-    if (key.startsWith("JUICE_")) continue;
-    if (!originalKeys.has(key)) childEnv[key] = value;
+
+  if (mode === "local") {
+    for (const [key, value] of Object.entries(readDotEnv(join(root, ".env")))) {
+      if (key.startsWith("JUICE_")) continue;
+      if (!originalKeys.has(key)) childEnv[key] = value;
+    }
+  } else {
+    const token = getToken(env);
+    if (!token) {
+      console.error("Run `juice auth login` or set JUICE_TOKEN before running with remote secrets.");
+      return 1;
+    }
+    try {
+      const listPath = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets`;
+      const listed = await requestJson<{ keys: string[] }>(`${apiBase(env)}${listPath}`, {
+        method: "GET",
+        token
+      });
+      for (const key of listed.keys) {
+        if (key.startsWith("JUICE_")) continue;
+        if (originalKeys.has(key)) continue;
+        const getPath = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets/${encodeURIComponent(key)}`;
+        const response = await requestJson<{ value: string }>(`${apiBase(env)}${getPath}`, {
+          method: "GET",
+          token
+        });
+        childEnv[key] = response.value;
+      }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      return 1;
+    }
   }
 
   const [command, ...commandArgs] = args.runCommand;

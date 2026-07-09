@@ -32,6 +32,12 @@ test("juice.get fetches one remote key in non-local mode", async () => {
     },
     async putSecret() {
       throw new Error("unexpected write");
+    },
+    async listKeys() {
+      throw new Error("unexpected list");
+    },
+    async deleteSecret() {
+      throw new Error("unexpected delete");
     }
   };
   const server = createJuiceServer({ backend, tokenSecret: TEST_SECRET, revocationStore: new MemoryTokenRevocationStore() });

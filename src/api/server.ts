@@ -93,40 +93,53 @@ export function createJuiceServer(options: JuiceServerOptions = {}): Server {
         return;
       }
 
-      const match = /^\/projects\/([^/]+)\/envs\/([^/]+)\/secrets\/([^/]+)$/.exec(url.pathname);
-      if (!match || (req.method !== "GET" && req.method !== "PUT")) {
+      const listMatch = /^\/projects\/([^/]+)\/envs\/([^/]+)\/secrets$/.exec(url.pathname);
+      const secretMatch = /^\/projects\/([^/]+)\/envs\/([^/]+)\/secrets\/([^/]+)$/.exec(url.pathname);
+
+      if (listMatch && req.method === "GET") {
+        await handleSecretList(req, res, requestId, {
+          project: decodeURIComponent(listMatch[1]),
+          env: decodeURIComponent(listMatch[2])
+        }, backend, signingSecret, authorize, revocationStore, principalLimiter);
+        return;
+      }
+
+      if (!secretMatch || (req.method !== "GET" && req.method !== "PUT" && req.method !== "DELETE")) {
         sendJson(res, 404, { requestId, error: "Not found" });
         return;
       }
 
+      // DELETE uses the write action for v1 (a write token can already overwrite a
+      // value). A future dedicated `delete` action could split this.
       const action: TokenAction = req.method === "GET" ? "read" : "write";
+      const auditAction: AuditAction = req.method === "DELETE" ? "delete" : action;
       const refBase = {
-        project: decodeURIComponent(match[1]),
-        env: decodeURIComponent(match[2]),
-        key: decodeURIComponent(match[3])
+        project: decodeURIComponent(secretMatch[1]),
+        env: decodeURIComponent(secretMatch[2]),
+        key: decodeURIComponent(secretMatch[3])
       };
       const principal = await authenticate(req, signingSecret, revocationStore);
       if (!principal) {
-        auditSecretAccess({ requestId, principal: "anonymous", action, ...refBase, outcome: "unauthorized" });
+        auditSecretAccess({ requestId, principal: "anonymous", action: auditAction, ...refBase, outcome: "unauthorized" });
         sendJson(res, 401, { requestId, error: "Unauthorized" });
         return;
       }
       if (!principalLimiter.allow(principal.sub)) {
-        auditSecretAccess({ requestId, principal: principal.sub, action, ...refBase, outcome: "rate_limited" });
+        auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "rate_limited" });
         sendJson(res, 429, { requestId, error: "Too many requests" });
         return;
       }
 
       const userId = githubUserId(principal.sub);
       if (!userId) {
-        auditSecretAccess({ requestId, principal: principal.sub, action, ...refBase, outcome: "unauthorized" });
+        auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "unauthorized" });
         sendJson(res, 401, { requestId, error: "Unauthorized" });
         return;
       }
 
       const ref: SecretRef = { userId, ...refBase };
       if (!await authorizeAccess(authorize, { ...ref, action, principal })) {
-        auditSecretAccess({ requestId, principal: principal.sub, action, ...refBase, outcome: "forbidden" });
+        auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "forbidden" });
         sendJson(res, 403, { requestId, error: "Forbidden" });
         return;
       }
@@ -134,23 +147,30 @@ export function createJuiceServer(options: JuiceServerOptions = {}): Server {
       if (req.method === "GET") {
         const value = await backend.getSecret(ref);
         if (value === undefined) {
-          auditSecretAccess({ requestId, principal: principal.sub, action, ...refBase, outcome: "not_found" });
+          auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "not_found" });
           sendJson(res, 404, { requestId, error: "Secret not found" });
           return;
         }
-        auditSecretAccess({ requestId, principal: principal.sub, action, ...refBase, outcome: "ok" });
+        auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "ok" });
         sendJson(res, 200, { requestId, value });
+        return;
+      }
+
+      if (req.method === "DELETE") {
+        await backend.deleteSecret(ref);
+        auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "ok" });
+        sendJson(res, 204, {});
         return;
       }
 
       const body = await readJson<{ value?: unknown }>(req);
       if (typeof body.value !== "string") {
-        auditSecretAccess({ requestId, principal: principal.sub, action, ...refBase, outcome: "bad_request" });
+        auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "bad_request" });
         sendJson(res, 400, { requestId, error: "Secret value must be a string" });
         return;
       }
       await backend.putSecret(ref, body.value);
-      auditSecretAccess({ requestId, principal: principal.sub, action, ...refBase, outcome: "ok" });
+      auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "ok" });
       sendJson(res, 204, {});
     } catch (error) {
       if (error instanceof HttpError) {
@@ -171,6 +191,51 @@ export function createJuiceServer(options: JuiceServerOptions = {}): Server {
   server.headersTimeout = 10_000;
   server.requestTimeout = 15_000;
   return server;
+}
+
+async function handleSecretList(
+  req: IncomingMessage,
+  res: ServerResponse,
+  requestId: string,
+  refBase: { project: string; env: string },
+  backend: SecretsBackend,
+  signingSecret: string,
+  authorize: (request: AccessRequest) => boolean | Promise<boolean>,
+  revocationStore: TokenRevocationStore,
+  principalLimiter: TokenBucketLimiter
+): Promise<void> {
+  const action: TokenAction = "read";
+  const auditAction: AuditAction = "list";
+  const principal = await authenticate(req, signingSecret, revocationStore);
+  if (!principal) {
+    auditSecretAccess({ requestId, principal: "anonymous", action: auditAction, ...refBase, outcome: "unauthorized" });
+    sendJson(res, 401, { requestId, error: "Unauthorized" });
+    return;
+  }
+  if (!principalLimiter.allow(principal.sub)) {
+    auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "rate_limited" });
+    sendJson(res, 429, { requestId, error: "Too many requests" });
+    return;
+  }
+
+  const userId = githubUserId(principal.sub);
+  if (!userId) {
+    auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "unauthorized" });
+    sendJson(res, 401, { requestId, error: "Unauthorized" });
+    return;
+  }
+
+  const probe: SecretRef = { userId, ...refBase, key: "__list__" };
+  if (!await authorizeAccess(authorize, { ...probe, action, principal })) {
+    auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "forbidden" });
+    sendJson(res, 403, { requestId, error: "Forbidden" });
+    return;
+  }
+
+  // Tenant isolation: listKeys must only ever be called with the caller's userId.
+  const keys = await backend.listKeys({ userId, project: refBase.project, env: refBase.env });
+  auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "ok" });
+  sendJson(res, 200, { requestId, keys });
 }
 
 async function authenticate(
@@ -423,13 +488,15 @@ function sendJson(res: ServerResponse, status: number, body: Record<string, unkn
   res.end(`${JSON.stringify(body)}\n`);
 }
 
+type AuditAction = TokenAction | "list" | "delete";
+
 function auditSecretAccess(event: {
   requestId: string;
   principal: string;
-  action: TokenAction;
+  action: AuditAction;
   project: string;
   env: string;
-  key: string;
+  key?: string;
   outcome: string;
 }): void {
   console.log(JSON.stringify({ ts: new Date().toISOString(), ...event }));

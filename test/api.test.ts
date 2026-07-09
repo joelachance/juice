@@ -59,6 +59,13 @@ test("API rejects unauthorized reads before calling the backend", async () => {
     },
     async putSecret() {
       called = true;
+    },
+    async listKeys() {
+      called = true;
+      return [];
+    },
+    async deleteSecret() {
+      called = true;
     }
   };
   const server = createJuiceServer({ backend, tokenSecret: TEST_SECRET, revocationStore: new MemoryTokenRevocationStore() });
@@ -79,7 +86,11 @@ test("API stores secrets under the authenticated GitHub user namespace", async (
     },
     async putSecret(ref, value) {
       writes.push({ ref, value });
-    }
+    },
+    async listKeys() {
+      return [];
+    },
+    async deleteSecret() {}
   };
   const server = createJuiceServer({
     backend,
@@ -342,7 +353,11 @@ test("500 responses are sanitized and include request ids", async () => {
       async getSecret() {
         throw new Error("AWS internal detail");
       },
-      async putSecret() {}
+      async putSecret() {},
+      async listKeys() {
+        return [];
+      },
+      async deleteSecret() {}
     },
     tokenSecret: TEST_SECRET,
     revocationStore: new MemoryTokenRevocationStore()
@@ -361,13 +376,150 @@ test("500 responses are sanitized and include request ids", async () => {
   assert.equal(typeof body.requestId, "string");
 });
 
+test("list returns only the caller's keys (cross-user isolation)", async () => {
+  const backend = memoryBackend([
+    { ref: { userId: "1", project: "demo", env: "dev", key: "ALPHA" }, value: "a" },
+    { ref: { userId: "1", project: "demo", env: "dev", key: "BETA" }, value: "b" },
+    { ref: { userId: "2", project: "demo", env: "dev", key: "OTHER" }, value: "leak-me" },
+    { ref: { userId: "2", project: "demo", env: "dev", key: "SECRET" }, value: "nope" }
+  ]);
+  const logs: string[] = [];
+  const previousLog = console.log;
+  console.log = (message?: unknown) => {
+    logs.push(String(message));
+  };
+  const server = createJuiceServer({
+    backend,
+    tokenSecret: TEST_SECRET,
+    revocationStore: new MemoryTokenRevocationStore()
+  });
+  const port = await listen(server);
+  const tokenA = signToken({ sub: "github:1" }, TEST_SECRET);
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets`, {
+      headers: { authorization: `Bearer ${tokenA}` }
+    });
+    const body = await response.json() as { keys?: string[] };
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.keys, ["ALPHA", "BETA"]);
+    assert.deepEqual(backend.listed, [{ userId: "1", project: "demo", env: "dev" }]);
+    assert.equal(logs.some((line) => line.includes('"action":"list"') && line.includes('"outcome":"ok"')), true);
+    assert.equal(logs.some((line) => /leak-me|nope|"value"/.test(line)), false);
+  } finally {
+    console.log = previousLog;
+    server.close();
+  }
+});
+
+test("unset deletes with write authz; read-only machine token gets 403", async () => {
+  const backend = memoryBackend([
+    { ref: { userId: "1", project: "demo", env: "dev", key: "KEY" }, value: "secret" }
+  ]);
+  const logs: string[] = [];
+  const previousLog = console.log;
+  console.log = (message?: unknown) => {
+    logs.push(String(message));
+  };
+  const server = createJuiceServer({
+    backend,
+    tokenSecret: TEST_SECRET,
+    revocationStore: new MemoryTokenRevocationStore()
+  });
+  const port = await listen(server);
+  const readOnly = signToken({
+    sub: "github:1",
+    scope: { project: "demo", env: "dev", actions: ["read"] }
+  }, TEST_SECRET);
+  const writer = signToken({
+    sub: "github:1",
+    scope: { project: "demo", env: "dev", actions: ["read", "write"] }
+  }, TEST_SECRET);
+
+  try {
+    const listOk = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets`, {
+      headers: { authorization: `Bearer ${readOnly}` }
+    });
+    assert.equal(listOk.status, 200);
+    assert.deepEqual((await listOk.json() as { keys: string[] }).keys, ["KEY"]);
+
+    const denied = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets/KEY`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${readOnly}` }
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(backend.store.has("1/demo/dev/KEY"), true);
+
+    const deleted = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets/KEY`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${writer}` }
+    });
+    assert.equal(deleted.status, 204);
+    assert.equal(backend.store.has("1/demo/dev/KEY"), false);
+
+    const again = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets/KEY`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${writer}` }
+    });
+    assert.equal(again.status, 204);
+
+    assert.equal(logs.some((line) => line.includes('"action":"delete"') && line.includes('"outcome":"ok"')), true);
+    assert.equal(logs.some((line) => line.includes("secret")), false);
+  } finally {
+    console.log = previousLog;
+    server.close();
+  }
+});
+
 function valueBackend(value: string): SecretsBackend {
   return {
     async getSecret() {
       return value;
     },
-    async putSecret() {}
+    async putSecret() {},
+    async listKeys() {
+      return [];
+    },
+    async deleteSecret() {}
   };
+}
+
+function memoryBackend(initial: Array<{ ref: SecretRef; value: string }> = []): SecretsBackend & {
+  store: Map<string, string>;
+  deleted: SecretRef[];
+  listed: Array<{ userId: string; project: string; env: string }>;
+} {
+  const store = new Map(initial.map(({ ref, value }) => [secretKey(ref), value]));
+  const deleted: SecretRef[] = [];
+  const listed: Array<{ userId: string; project: string; env: string }> = [];
+  return {
+    store,
+    deleted,
+    listed,
+    async getSecret(ref) {
+      return store.get(secretKey(ref));
+    },
+    async putSecret(ref, value) {
+      store.set(secretKey(ref), value);
+    },
+    async listKeys(ref) {
+      listed.push(ref);
+      const prefix = `${ref.userId}/${ref.project}/${ref.env}/`;
+      return [...store.keys()]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length))
+        .sort();
+    },
+    async deleteSecret(ref) {
+      deleted.push(ref);
+      store.delete(secretKey(ref));
+    }
+  };
+}
+
+function secretKey(ref: SecretRef): string {
+  return `${ref.userId}/${ref.project}/${ref.env}/${ref.key}`;
 }
 
 async function listen(server: ReturnType<typeof createJuiceServer>): Promise<number> {

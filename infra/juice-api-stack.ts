@@ -138,7 +138,8 @@ export class JuiceApiStack extends Stack {
       actions: [
         "secretsmanager:DescribeSecret",
         "secretsmanager:GetSecretValue",
-        "secretsmanager:PutSecretValue"
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:DeleteSecret"
       ],
       resources: [juiceSecretNamespaceArn, tokenRevocationsArn]
     }));
@@ -153,6 +154,12 @@ export class JuiceApiStack extends Stack {
           ]
         }
       }
+    }));
+    // ListSecrets cannot be IAM-scoped by name prefix; the API filters results to
+    // /juice/users/<caller-id>/… before returning keys (tenant isolation boundary).
+    service.taskDefinition.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ["secretsmanager:ListSecrets"],
+      resources: ["*"]
     }));
 
     new CfnOutput(this, "ApiUrl", {
