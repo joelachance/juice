@@ -1,22 +1,20 @@
 # Juice
 
-Juice is minimal secrets management for agents. Local development reads and
-writes `.env`; non-local environments fetch one secret at a time from a Juice
-API backed by AWS Secrets Manager.
+**Agent secrets without copy/paste.**
 
-## V1 commands
+Call `juice.get("KEY")` (or `juice get KEY` / `juice run -- …`). In development
+Juice reads your local `.env`; in production it fetches from the Juice API
+(AWS Secrets Manager). Same call site — Juice picks the source.
+
+## Install + 5-minute local quickstart
+
+No server and no login required for local use.
 
 ```sh
-juice auth login
-juice set OPENAI_API_KEY
-juice set OPENAI_API_KEY --remote
+npm i @juice/sdk
+npx juice init
+npx juice set OPENAI_API_KEY
 ```
-
-`juice set KEY` appends to local `.env` and records a fingerprint so Juice can
-warn when `.env` changes outside the CLI. `--remote` writes through the Juice
-API to AWS Secrets Manager and never prints the secret value.
-
-## SDK
 
 ```ts
 import { juice } from "@juice/sdk";
@@ -24,161 +22,129 @@ import { juice } from "@juice/sdk";
 const apiKey = await juice.get("OPENAI_API_KEY");
 ```
 
-Resolution order:
+`juice init` adds a gitignore block for `.env` / `.juice/` (once) and creates an
+empty `0600` `.env` if missing. `juice set KEY` prompts for the value and
+appends it to `.env` — the value is never echoed.
 
-1. `JUICE_ENV`
-2. `APP_ENV`
-3. `NODE_ENV`
-4. `development`
+## Agents quickstart
 
-`local` and `development` read local `.env`, unless `JUICE_REMOTE=1` is set.
-Remote reads use `JUICE_PROJECT` or the nearest `package.json` name.
-By default, remote commands use the hosted Juice API at `https://api.juice.run`.
-Set `JUICE_API_URL` to use a local or self-hosted API.
+Copy [`docs/AGENTS.snippet.md`](docs/AGENTS.snippet.md) into your project's
+`AGENTS.md` or `CLAUDE.md`. Short version:
 
-## API service
+- Prefer `juice set KEY`, `juice.get("KEY")`, and `juice run -- <cmd>` over
+  editing `.env` by hand.
+- Never print secret values; `juice list` shows names only.
+- For CI/headless work, use a least-privilege machine token (one project + env,
+  `--read-only` when possible).
 
-The production secret backend uses the official AWS SDK for JavaScript v3:
-`@aws-sdk/client-secrets-manager`.
-
-```ts
-import { createJuiceServer } from "@juice/sdk/api";
-
-const server = createJuiceServer();
-server.listen(8787);
-```
-
-AWS credentials are resolved by the AWS SDK credential provider chain.
-
-To run the API locally:
+Run a process with secrets injected (pre-set env vars win; `JUICE_*` is skipped):
 
 ```sh
-npm run dev
+juice run -- node app.js
+juice run -- npm test
 ```
 
-This loads `.env` and `.env.local` automatically. If `GITHUB_CLIENT_ID` is in
-`.env.local`, no export is needed.
-
-To run the full local API smoke test in one command:
+## Team / remote
 
 ```sh
-npm run test:api-local
+juice auth login
+juice set OPENAI_API_KEY --remote
+juice get OPENAI_API_KEY --remote
+juice list --remote
+juice unset OPENAI_API_KEY --remote --yes
 ```
 
-Health checks:
+Machine tokens for CI (scoped, revocable):
 
 ```sh
-curl http://localhost:8787/healthz
+juice token create --project my-app --env prod --read-only --ttl 90d
+# prints the token on stdout; metadata on stderr
+export JUICE_TOKEN=…
+juice token revoke          # revoke the current token
+juice token revoke <token>  # revoke another token you own (pass the full JWT)
 ```
 
-Version checks:
+Default remote API: `https://api.juice.run`. Override with `JUICE_API_URL` for
+self-hosting (must be HTTPS unless localhost / `JUICE_ALLOW_INSECURE=1`).
 
-```sh
-curl http://localhost:8787/
-```
+## Command reference
 
-The root path returns the deployed service version and commit:
+| Command | Purpose |
+|---------|---------|
+| `juice auth login` | GitHub device-flow login; stores token in Keychain / `~/.juice` |
+| `juice init` | Scaffold `.gitignore` + `.env` for local secrets |
+| `juice set KEY` | Add/update a secret (local `.env` or `--remote`) |
+| `juice get KEY` | Print one value to **stdout** only (for `$(…)`) |
+| `juice list` | Print sorted key **names** only |
+| `juice unset KEY` | Remove a secret (`--yes` skips confirm) |
+| `juice run -- <cmd> [args…]` | Exec with secrets injected; propagates exit code |
+| `juice token create` | Create a scoped machine token |
+| `juice token revoke [token]` | Revoke current or target token |
+| `juice help` | Help screen |
 
-```json
-{"service":"juice-api","commit":"<git-sha>","version":"0.1.0"}
-```
+Shared flags on secret commands (`set` / `get` / `list` / `unset` / `run`):
 
-For local development, the API and CLI automatically read `.env` and
-`.env.local` from the current directory. Real environment variables still win,
-and `.env.local` overrides `.env`.
+| Flag | Meaning |
+|------|---------|
+| `--local` | Force local `.env` mode |
+| `--remote` | Force remote API mode |
+| `--project NAME` | Override project |
+| `--env NAME` | Override environment name |
+| `--yes` / `-y` | Skip confirmation (`unset`) |
 
-`JUICE_TOKEN_SECRET` is only for whoever operates a Juice API server. Hosted SaaS
-users should not set it; they only run `juice auth login` and use the hosted API.
-Self-hosters need it because, after GitHub OAuth completes, the API signs its own
-bearer token for the CLI/SDK. This secret prevents forged Juice tokens. It is not
-the GitHub OAuth client secret, not an AWS credential, and not a user application
-secret. CDK creates it automatically for Fargate. Locally, `/`, `/healthz`, and
-`/auth/github/start` work without it; completing login and authorizing remote
-secret reads/writes need it.
+`--remote` and `--local` together is an error.
 
-## Docker
+Token flags: `--project`, `--env`, `--read-only`, `--ttl <Ns|Nm|Nh|Nd>`.
 
-Juice ships with a Dockerfile so the same API service can be self-hosted or run
-as the hosted Juice SaaS.
+## Mode resolution
 
-```sh
-docker build --build-arg JUICE_VERSION_COMMIT="$(git rev-parse HEAD)" -t juice-api .
-docker run --rm -p 8787:8787 \
-  -e JUICE_TOKEN_SECRET=replace-with-long-random-secret \
-  -e GITHUB_CLIENT_ID=your-github-oauth-client-id \
-  -e AWS_REGION=us-east-1 \
-  -e AWS_ACCESS_KEY_ID=... \
-  -e AWS_SECRET_ACCESS_KEY=... \
-  juice-api
-```
+| Condition | Mode |
+|-----------|------|
+| `--remote` | remote |
+| `--local` | local |
+| `JUICE_REMOTE=1` or `true` | remote |
+| `JUICE_ENV` / `APP_ENV` / `NODE_ENV` is `local` or `development` (default) | local |
+| otherwise | remote |
 
-For AWS deployments, prefer IAM roles or web identity over static access keys.
-The runtime identity needs:
+Resolution order for the env name: `JUICE_ENV` → `APP_ENV` → `NODE_ENV` →
+`development`.
 
-```json
-{
-  "Effect": "Allow",
-  "Action": [
-    "secretsmanager:CreateSecret",
-    "secretsmanager:DescribeSecret",
-    "secretsmanager:PutSecretValue",
-    "secretsmanager:GetSecretValue"
-  ],
-  "Resource": "arn:aws:secretsmanager:*:*:secret:/juice/projects/*"
-}
-```
+Project name: `JUICE_PROJECT` → nearest `package.json` `name` → directory name.
 
-## Hosted SaaS
+## Environment variables
 
-The hosted Juice API is the default remote endpoint. The OSS API remains fully
-self-hostable under AGPL-3.0-or-later; the hosted service can add billing,
-organization policy, rate limits, support, and managed AWS operations without
-changing the CLI or SDK interface.
+Repo-local `.env` / `.env.local` configure **your app**, never Juice itself.
+Any `JUICE_*` key found in those files is **ignored** (with a one-line warning).
+Set Juice control-plane vars in the real environment or via flags.
 
-## Deploy the SDK/API stack
+### Client
 
-The CDK stack deploys the Dockerfile to ECS Fargate behind an Application Load
-Balancer. It also creates:
+| Variable | Purpose |
+|----------|---------|
+| `JUICE_ENV` | Environment name / mode hint |
+| `APP_ENV` | Fallback env name |
+| `NODE_ENV` | Fallback env name |
+| `JUICE_REMOTE` | `1` / `true` forces remote |
+| `JUICE_PROJECT` | Override project name |
+| `JUICE_API_URL` | API base (default `https://api.juice.run`) |
+| `JUICE_TOKEN` | Bearer token (overrides Keychain / `~/.juice`) |
+| `JUICE_HOME` | Override `~/.juice` |
+| `JUICE_ALLOW_INSECURE` | `1` allows non-HTTPS `JUICE_API_URL` |
 
-- a VPC and ECS cluster
-- CloudWatch log group
-- generated `JUICE_TOKEN_SECRET` in AWS Secrets Manager
-- task IAM permissions for Juice-owned Secrets Manager paths under
-  `/juice/projects/*`
+### Server (operators / self-hosters)
 
-Bootstrap CDK once per AWS account/region:
+| Variable | Purpose |
+|----------|---------|
+| `JUICE_TOKEN_SECRET` | JWT signing secret (≥32 chars; required; no fallback) |
+| `GITHUB_CLIENT_ID` | GitHub OAuth app client ID (device flow) |
+| `PORT` | Listen port (default `8787`) |
+| `HOST` | Bind address |
+| `JUICE_VERSION_COMMIT` | Commit SHA exposed by `GET /` |
 
-```sh
-npm ci
-npm run build
-npx cdk bootstrap aws://ACCOUNT_ID/us-east-1
-```
+## Self-hosting & security
 
-Deploy:
-
-```sh
-npx cdk deploy JuiceApiStack \
-  -c versionCommit="$(git rev-parse HEAD)" \
-  --parameters GitHubClientId=your-github-oauth-client-id \
-  --parameters VersionCommit="$(git rev-parse HEAD)"
-```
-
-After deploy, use the `ApiUrl` stack output:
-
-```sh
-curl "$API_URL/healthz"
-curl "$API_URL/"
-```
-
-To point a client at a self-hosted stack:
-
-```sh
-export JUICE_API_URL="$API_URL"
-```
-
-GitHub Actions deployment is defined in `.github/workflows/deploy.yaml`. Configure
-these repository settings:
-
-- secret `AWS_DEPLOY_ROLE_ARN`: AWS role assumable by GitHub OIDC
-- secret `JUICE_GITHUB_CLIENT_ID`: GitHub OAuth app client ID
-- variable `AWS_REGION`: deployment region, defaults to `us-east-1`
+- Self-host: clone this repo and deploy with Docker/CDK — see
+  [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md). The published npm package is
+  SDK/CLI only (Apache-2.0); there is no `@juice/sdk/api` export.
+- Threat model & reporting: [`SECURITY.md`](SECURITY.md)
+- License map: [`LICENSING.md`](LICENSING.md)
