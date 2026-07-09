@@ -54,7 +54,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     await createMachineToken(args);
     return 0;
   }
-  if (args.command === "token" && args.subcommand === "revoke" && args.jti) {
+  if (args.command === "token" && args.subcommand === "revoke") {
     await revokeToken(args.jti);
     return 0;
   }
@@ -154,14 +154,20 @@ async function createMachineToken(args: Args): Promise<void> {
   console.error(`Created token ${created.jti} for ${created.scope.project}/${created.scope.env} (${created.scope.actions.join(",")}, ${created.expiresIn}s).`);
 }
 
-async function revokeToken(jti: string): Promise<void> {
+async function revokeToken(target: string | undefined): Promise<void> {
   const token = getToken();
   if (!token) throw new Error("Run `juice auth login` or set JUICE_TOKEN before revoking tokens.");
-  await requestJson(`${apiBase()}/tokens/${encodeURIComponent(jti)}`, {
+  const currentJti = decodeTokenJti(token);
+  if (!currentJti) throw new Error("Stored token is invalid; run `juice auth login` again.");
+  const targetJti = target ? decodeTokenJti(target) ?? (target === currentJti ? target : undefined) : currentJti;
+  if (!targetJti) throw new Error("Pass the full target token, or omit the argument to revoke your current token.");
+
+  await requestJson(`${apiBase()}/tokens/${encodeURIComponent(targetJti)}`, {
     method: "DELETE",
-    token
+    token,
+    body: target && targetJti !== currentJti ? JSON.stringify({ token: target }) : undefined
   });
-  console.log(`Revoked token ${jti}.`);
+  console.log(`Revoked token ${targetJti}.`);
 }
 
 function warnIfDrift(): void {
@@ -235,7 +241,7 @@ Setup:
 
 Secrets:
   set        Add a secret to .env, or use --remote for Juice/AWS
-  token      Create or revoke scoped machine tokens
+  token      Create tokens, revoke current token, or revoke by full token
 
 Help:
   help       Help screen
@@ -263,6 +269,17 @@ function parseTtl(value: string | undefined): number | undefined {
   const unit = match[2] || "s";
   const multiplier = unit === "s" ? 1 : unit === "m" ? 60 : unit === "h" ? 60 * 60 : 24 * 60 * 60;
   return amount * multiplier;
+}
+
+function decodeTokenJti(token: string): string | undefined {
+  const [, encodedPayload] = token.split(".");
+  if (!encodedPayload) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as { jti?: unknown };
+    return typeof payload.jti === "string" && payload.jti.trim() ? payload.jti : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

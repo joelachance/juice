@@ -89,7 +89,7 @@ export function createJuiceServer(options: JuiceServerOptions = {}): Server {
           await handleTokenCreate(req, res, requestId, principal, signingSecret, authorize);
           return;
         }
-        await handleTokenRevoke(res, requestId, tokenRevokeMatch?.[1] || "", revocationStore);
+        await handleTokenRevoke(req, res, requestId, tokenRevokeMatch?.[1] || "", principal, signingSecret, revocationStore);
         return;
       }
 
@@ -267,6 +267,11 @@ async function handleTokenCreate(
   signingSecret: string,
   authorize: (request: AccessRequest) => boolean | Promise<boolean>
 ): Promise<void> {
+  if (principal.scope !== undefined) {
+    sendJson(res, 403, { requestId, error: "Machine tokens cannot create tokens" });
+    return;
+  }
+
   const body = await readJson<{
     project?: unknown;
     env?: unknown;
@@ -308,9 +313,12 @@ async function handleTokenCreate(
 }
 
 async function handleTokenRevoke(
+  req: IncomingMessage,
   res: ServerResponse,
   requestId: string,
   jti: string,
+  principal: AuthPrincipal,
+  signingSecret: string,
   revocationStore: TokenRevocationStore
 ): Promise<void> {
   const decoded = decodeURIComponent(jti);
@@ -318,7 +326,32 @@ async function handleTokenRevoke(
     sendJson(res, 400, { requestId, error: "jti is required" });
     return;
   }
-  await revocationStore.revoke(decoded);
+  if (decoded === principal.jti) {
+    await revocationStore.revoke(decoded, principal.sub);
+    sendJson(res, 204, {});
+    return;
+  }
+
+  const body = await readJson<{ token?: unknown }>(req);
+  if (typeof body.token !== "string") {
+    sendJson(res, 400, { requestId, error: "token is expired or invalid" });
+    return;
+  }
+  const target = verifyToken(body.token, signingSecret);
+  if (!target) {
+    sendJson(res, 400, { requestId, error: "token is expired or invalid" });
+    return;
+  }
+  if (target.jti !== decoded) {
+    sendJson(res, 400, { requestId, error: "token jti does not match path" });
+    return;
+  }
+  if (target.sub !== principal.sub) {
+    sendJson(res, 403, { requestId, error: "Forbidden" });
+    return;
+  }
+
+  await revocationStore.revoke(target.jti, target.sub);
   sendJson(res, 204, {});
 }
 
