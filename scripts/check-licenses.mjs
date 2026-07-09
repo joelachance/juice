@@ -16,6 +16,8 @@ const allowed = [
   "LGPL-3.0-or-later"
 ];
 
+const projectLicenses = new Set(["Apache-2.0", "AGPL-3.0-or-later"]);
+
 async function packageDirs(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   const dirs = [];
@@ -37,14 +39,21 @@ function normalizeLicense(license) {
   return "";
 }
 
+const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+const projectLicense = normalizeLicense(pkg.license);
+if (!projectLicenses.has(projectLicense)) {
+  console.error(`Unexpected project license: ${projectLicense || "missing"}`);
+  process.exit(1);
+}
+
 const failures = [];
 for (const dir of await packageDirs(nodeModules)) {
   try {
-    const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
-    const license = normalizeLicense(pkg.license);
+    const dependency = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
+    const license = normalizeLicense(dependency.license);
     const expressions = license.split(/\s+(?:OR|AND)\s+/);
     if (!expressions.some((expr) => allowed.includes(expr))) {
-      failures.push(`${pkg.name}@${pkg.version}: ${license || "missing license"}`);
+      failures.push(`${dependency.name}@${dependency.version}: ${license || "missing license"}`);
     }
   } catch {
     failures.push(`${dir}: missing package.json`);
@@ -57,4 +66,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log("Dependency licenses are compatible with copyleft distribution.");
+console.log(`Project license ${projectLicense}; dependency licenses are compatible.`);

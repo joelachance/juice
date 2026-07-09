@@ -2,18 +2,23 @@
   "name": "@juice/sdk",
   "version": "0.1.0",
   "description": "Minimal agent secrets management backed by local .env files and AWS Secrets Manager.",
-  "license": "AGPL-3.0-or-later",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "juice": "./dist/src/cli/main.js"
   },
   "exports": {
-    ".": "./dist/src/sdk/index.js",
-    "./api": "./dist/src/api/server.js"
+    ".": "./dist/src/sdk/index.js"
   },
   "files": [
-    "dist/src",
+    "dist/src/sdk",
+    "dist/src/cli",
+    "dist/src/auth",
+    "dist/src/config",
+    "dist/src/http",
+    "dist/src/local",
     "LICENSE",
+    "LICENSING.md",
     "README.md"
   ],
   "scripts": {
@@ -25,7 +30,8 @@
     "test:api-local": "npm run build && node scripts/test-api-local.mjs",
     "start:api": "node dist/src/api/main.js",
     "test": "npm run build && node --test dist/test/*.test.js",
-    "check:licenses": "node scripts/check-licenses.mjs"
+    "check:licenses": "node scripts/check-licenses.mjs",
+    "check:pack": "node scripts/check-pack.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.840.0"
