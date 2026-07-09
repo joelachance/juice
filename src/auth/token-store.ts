@@ -57,8 +57,10 @@ function writeMacKeychain(token: string): boolean {
     // Missing existing token is fine.
   }
   try {
-    execFileSync("security", ["add-generic-password", "-s", service, "-a", account, "-w", token, "-U"], {
-      stdio: "ignore"
+    // Omit -w value so the secret is read from stdin (password + retype), not argv.
+    execFileSync("security", ["add-generic-password", "-s", service, "-a", account, "-U", "-w"], {
+      input: `${token}\n${token}\n`,
+      stdio: ["pipe", "ignore", "ignore"]
     });
     return true;
   } catch {

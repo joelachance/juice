@@ -1,15 +1,18 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { join } from "node:path";
+import { existsSync, writeFileSync } from "node:fs";
 import { getToken, setToken } from "../auth/token-store.js";
-import { resolveProject, resolveJuiceEnv } from "../config/project.js";
+import { resolveProject, resolveJuiceEnv, isLocalMode } from "../config/project.js";
 import { apiBase, requestJson } from "../http/client.js";
 import { loadJuiceEnv } from "../local/bootstrap-env.js";
-import { appendDotEnvValue } from "../local/dotenv.js";
+import { appendDotEnvValue, readDotEnv, removeDotEnvKey } from "../local/dotenv.js";
+import { ensureJuiceGitignore } from "../local/gitignore.js";
 import { hasEnvDrift, recordEnvFingerprint } from "../local/state.js";
 
 export const juiceLogoRaw = String.raw`       __
@@ -19,6 +22,7 @@ export const juiceLogoRaw = String.raw`       __
 \____/\__,_/_/\___/\___/`;
 
 const juiceTagline = "agent secrets without copy/paste";
+const LOGIN_DEFAULT_EXPIRES_SECONDS = 15 * 60;
 
 type Args = {
   command?: string;
@@ -30,7 +34,10 @@ type Args = {
   readOnly: boolean;
   jti?: string;
   remote: boolean;
+  local: boolean;
+  yes: boolean;
   help: boolean;
+  runCommand: string[];
 };
 
 export async function runCli(argv = process.argv.slice(2)): Promise<number> {
@@ -40,15 +47,38 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     console.log(rootHelpText());
     return 0;
   }
+  if (args.remote && args.local) {
+    console.error("Pass only one of --remote or --local.");
+    return 1;
+  }
   if (args.command === "auth" && args.subcommand === "login") {
-    warnIfDrift();
+    warnIfDrift(args);
     await login();
     return 0;
   }
+  if (args.command === "init") {
+    return initProject(args);
+  }
   if (args.command === "set" && args.key) {
-    warnIfDrift();
-    await setSecret(args.key, args.remote);
+    warnIfDrift(args);
+    await setSecret(args.key, args);
     return 0;
+  }
+  if (args.command === "get" && args.key) {
+    warnIfDrift(args);
+    return getSecret(args.key, args);
+  }
+  if (args.command === "list") {
+    warnIfDrift(args);
+    return listSecrets(args);
+  }
+  if (args.command === "unset" && args.key) {
+    warnIfDrift(args);
+    return unsetSecret(args.key, args);
+  }
+  if (args.command === "run") {
+    warnIfDrift(args);
+    return runWithSecrets(args);
   }
   if (args.command === "token" && args.subcommand === "create") {
     await createMachineToken(args);
@@ -63,18 +93,44 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
 }
 
 function parseArgs(argv: string[]): Args {
+  const dashIndex = argv.indexOf("--");
+  const flagArgv = dashIndex >= 0 ? argv.slice(0, dashIndex) : argv;
+  const runCommand = dashIndex >= 0 ? argv.slice(dashIndex + 1) : [];
+  const command = flagArgv[0];
+  const keyCommands = new Set(["set", "get", "unset"]);
   return {
-    command: argv[0],
-    subcommand: argv[1],
-    key: argv[0] === "set" ? argv[1] : undefined,
-    project: flagValue(argv, "--project"),
-    env: flagValue(argv, "--env"),
-    ttlSeconds: parseTtl(flagValue(argv, "--ttl")),
-    readOnly: argv.includes("--read-only"),
-    jti: argv[0] === "token" && argv[1] === "revoke" ? argv[2] : undefined,
-    remote: argv.includes("--remote"),
-    help: argv.includes("--help") || argv.includes("-h")
+    command,
+    subcommand: flagArgv[1],
+    key: command && keyCommands.has(command) ? flagArgv[1] : undefined,
+    project: flagValue(flagArgv, "--project"),
+    env: flagValue(flagArgv, "--env"),
+    ttlSeconds: parseTtl(flagValue(flagArgv, "--ttl")),
+    readOnly: flagArgv.includes("--read-only"),
+    jti: command === "token" && flagArgv[1] === "revoke" ? flagArgv[2] : undefined,
+    remote: flagArgv.includes("--remote"),
+    local: flagArgv.includes("--local"),
+    yes: flagArgv.includes("--yes") || flagArgv.includes("-y"),
+    help: flagArgv.includes("--help") || flagArgv.includes("-h"),
+    runCommand
   };
+}
+
+function resolveSecretMode(args: Args, env: NodeJS.ProcessEnv = process.env): "local" | "remote" {
+  if (args.remote) return "remote";
+  if (args.local) return "local";
+  return isLocalMode(env) ? "local" : "remote";
+}
+
+function envWithOverrides(args: Args): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (args.project) env.JUICE_PROJECT = args.project;
+  if (args.env) env.JUICE_ENV = args.env;
+  if (args.remote) env.JUICE_REMOTE = "1";
+  if (args.local) {
+    delete env.JUICE_REMOTE;
+    if (!args.env && !env.JUICE_ENV) env.JUICE_ENV = "development";
+  }
+  return env;
 }
 
 async function login(): Promise<void> {
@@ -83,12 +139,17 @@ async function login(): Promise<void> {
     user_code: string;
     verification_uri: string;
     interval?: number;
+    expires_in?: number;
   }>(`${apiBase()}/auth/github/start`, { method: "POST", body: "{}" });
 
   console.log(`Open ${start.verification_uri} and enter code ${start.user_code}.`);
   const intervalMs = Math.max(start.interval ?? 5, 1) * 1000;
+  const expiresIn = typeof start.expires_in === "number" && start.expires_in > 0
+    ? start.expires_in
+    : LOGIN_DEFAULT_EXPIRES_SECONDS;
+  const deadline = Date.now() + expiresIn * 1000;
 
-  while (true) {
+  while (Date.now() < deadline) {
     await delay(intervalMs);
     const complete = await requestJson<{ token?: string; login?: string; error?: string }>(`${apiBase()}/auth/github/complete`, {
       method: "POST",
@@ -99,22 +160,54 @@ async function login(): Promise<void> {
       console.log(`Logged in${complete.login ? ` as ${complete.login}` : ""}.`);
       return;
     }
+    if (complete.error === "expired_token") {
+      throw new Error("Device code expired. Run `juice auth login` again.");
+    }
     if (complete.error && complete.error !== "authorization_pending" && complete.error !== "slow_down") {
       throw new Error(complete.error);
     }
   }
+  throw new Error("Device code expired. Run `juice auth login` again.");
 }
 
-async function setSecret(key: string, remote: boolean): Promise<void> {
-  const value = await promptSecret(`Value for ${key}: `);
-  const { project, root } = resolveProject();
-  const envName = resolveJuiceEnv();
+function initProject(args: Args): number {
+  const env = envWithOverrides(args);
+  const { root } = resolveProject(process.cwd(), env);
+  const gitignore = ensureJuiceGitignore(root);
+  const envFile = join(root, ".env");
+  let createdEnv = false;
+  if (!existsSync(envFile)) {
+    writeFileSync(envFile, "", { encoding: "utf8", mode: 0o600 });
+    createdEnv = true;
+  }
+  recordEnvFingerprint(root, envFile);
 
-  if (remote) {
-    const token = getToken();
+  if (gitignore.added) console.log("Added juice block to .gitignore.");
+  else console.log(".gitignore already has the juice block.");
+  if (createdEnv) console.log("Created .env (mode 0600).");
+  else console.log(".env already exists.");
+
+  console.log("");
+  console.log("Model: call juice.get(\"KEY\") — local .env in development, remote API otherwise.");
+  console.log("Same call site; Juice picks the source from JUICE_ENV / APP_ENV / NODE_ENV / JUICE_REMOTE.");
+  console.log("Next: juice set KEY");
+  return 0;
+}
+
+async function setSecret(key: string, args: Args): Promise<void> {
+  const value = await promptSecret(`Value for ${key}: `);
+  const env = envWithOverrides(args);
+  const mode = resolveSecretMode(args, env);
+  const { project, root } = resolveProject(process.cwd(), env);
+  const envName = args.env || resolveJuiceEnv(env);
+
+  ensureGitignoreForSet(root);
+
+  if (mode === "remote") {
+    const token = getToken(env);
     if (!token) throw new Error("Run `juice auth login` or set JUICE_TOKEN before writing remote secrets.");
     const path = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets/${encodeURIComponent(key)}`;
-    await requestJson(`${apiBase()}${path}`, {
+    await requestJson(`${apiBase(env)}${path}`, {
       method: "PUT",
       token,
       body: JSON.stringify({ value })
@@ -129,17 +222,137 @@ async function setSecret(key: string, remote: boolean): Promise<void> {
   console.log(`Appended ${key} to .env.`);
 }
 
+function ensureGitignoreForSet(root: string): void {
+  const result = ensureJuiceGitignore(root);
+  if (result.added) {
+    console.log("Added .env / .juice/ to .gitignore.");
+  }
+}
+
+async function getSecret(key: string, args: Args): Promise<number> {
+  const env = envWithOverrides(args);
+  const mode = resolveSecretMode(args, env);
+  const { project, root } = resolveProject(process.cwd(), env);
+  const envName = args.env || resolveJuiceEnv(env);
+
+  if (mode === "local") {
+    const value = readDotEnv(join(root, ".env"))[key];
+    if (value === undefined) {
+      console.error(`Missing local secret: ${key}`);
+      return 1;
+    }
+    console.log(value);
+    return 0;
+  }
+
+  const token = getToken(env);
+  if (!token) {
+    console.error("Run `juice auth login` or set JUICE_TOKEN before reading remote secrets.");
+    return 1;
+  }
+  const path = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets/${encodeURIComponent(key)}`;
+  try {
+    const response = await requestJson<{ value: string }>(`${apiBase(env)}${path}`, {
+      method: "GET",
+      token
+    });
+    console.log(response.value);
+    return 0;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+async function listSecrets(args: Args): Promise<number> {
+  const env = envWithOverrides(args);
+  const mode = resolveSecretMode(args, env);
+  if (mode === "remote") {
+    console.error("Remote list is not available yet; use local mode or omit --remote.");
+    return 1;
+  }
+  const { root } = resolveProject(process.cwd(), env);
+  const keys = Object.keys(readDotEnv(join(root, ".env"))).sort();
+  for (const key of keys) console.log(key);
+  return 0;
+}
+
+async function unsetSecret(key: string, args: Args): Promise<number> {
+  const env = envWithOverrides(args);
+  const mode = resolveSecretMode(args, env);
+  if (mode === "remote") {
+    console.error("Remote unset is not available yet; use local mode or omit --remote.");
+    return 1;
+  }
+  const { root } = resolveProject(process.cwd(), env);
+  const envFile = join(root, ".env");
+  const existing = readDotEnv(envFile);
+  if (!(key in existing)) {
+    console.log(`${key} is not set.`);
+    return 0;
+  }
+  if (!(await confirm(`Unset ${key} from .env?`, args.yes))) {
+    console.error("Cancelled.");
+    return 1;
+  }
+  removeDotEnvKey(envFile, key);
+  recordEnvFingerprint(root, envFile);
+  console.log(`Unset ${key}.`);
+  return 0;
+}
+
+async function runWithSecrets(args: Args): Promise<number> {
+  if (args.runCommand.length === 0) {
+    console.error("Usage: juice run -- <cmd> [args…]");
+    return 1;
+  }
+  const env = envWithOverrides(args);
+  const mode = resolveSecretMode(args, env);
+  if (mode === "remote") {
+    console.error("Remote run is not available yet; use local mode or omit --remote.");
+    return 1;
+  }
+
+  const { root } = resolveProject(process.cwd(), env);
+  const childEnv = { ...env };
+  const originalKeys = new Set(Object.keys(env));
+  for (const [key, value] of Object.entries(readDotEnv(join(root, ".env")))) {
+    if (key.startsWith("JUICE_")) continue;
+    if (!originalKeys.has(key)) childEnv[key] = value;
+  }
+
+  const [command, ...commandArgs] = args.runCommand;
+  return await new Promise<number>((resolvePromise) => {
+    const child = spawn(command, commandArgs, {
+      env: childEnv,
+      stdio: "inherit"
+    });
+    child.on("error", (error) => {
+      console.error(error.message);
+      resolvePromise(1);
+    });
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        resolvePromise(1);
+        return;
+      }
+      resolvePromise(code ?? 1);
+    });
+  });
+}
+
 async function createMachineToken(args: Args): Promise<void> {
-  const token = getToken();
+  const env = envWithOverrides(args);
+  const token = getToken(env);
   if (!token) throw new Error("Run `juice auth login` or set JUICE_TOKEN before creating machine tokens.");
-  const project = args.project || resolveProject().project;
-  const envName = args.env || resolveJuiceEnv();
+  const project = args.project || resolveProject(process.cwd(), env).project;
+  const envName = args.env || resolveJuiceEnv(env);
   const created = await requestJson<{
     token: string;
     jti: string;
     expiresIn: number;
     scope: { project: string; env: string; actions: string[] };
-  }>(`${apiBase()}/tokens`, {
+  }>(`${apiBase(env)}/tokens`, {
     method: "POST",
     token,
     body: JSON.stringify({
@@ -170,11 +383,26 @@ async function revokeToken(target: string | undefined): Promise<void> {
   console.log(`Revoked token ${targetJti}.`);
 }
 
-function warnIfDrift(): void {
-  const { root } = resolveProject();
+function warnIfDrift(args: Args): void {
+  const env = envWithOverrides(args);
+  const { root } = resolveProject(process.cwd(), env);
   const envFile = join(root, ".env");
   if (hasEnvDrift(root, envFile)) {
     console.warn(".env changed outside Juice. Use juice set KEY to add or update secrets.");
+  }
+}
+
+async function confirm(message: string, yes: boolean): Promise<boolean> {
+  if (yes) return true;
+  if (!input.isTTY) {
+    throw new Error("Pass --yes to confirm in non-interactive mode.");
+  }
+  const rl = createInterface({ input, output });
+  try {
+    const answer = await rl.question(`${message} [y/N] `);
+    return /^y(es)?$/i.test(answer.trim());
+  } finally {
+    rl.close();
   }
 }
 
@@ -237,17 +465,33 @@ Usage:
   juice [command]
 
 Setup:
-  auth       Authenticate with Juice
+  auth login Authenticate with Juice
+  init       Scaffold .gitignore + .env for local secrets
 
 Secrets:
-  set        Add a secret to .env, or use --remote for Juice/AWS
-  token      Create tokens, revoke current token, or revoke by full token
+  set KEY    Add a secret (local .env or --remote)
+  get KEY    Print one secret value to stdout
+  list       List secret key names (never values)
+  unset KEY  Remove a secret
+  run --     Run a command with secrets injected
+
+Tokens:
+  token create   Create a scoped machine token
+  token revoke   Revoke current token, or revoke by full token
 
 Help:
   help       Help screen
 
 Flags:
-  -h, --help   help for juice
+  --local          Force local .env mode
+  --remote         Force remote API mode
+  --project NAME   Override project
+  --env NAME       Override environment name
+  --yes, -y        Skip confirmation prompts
+  -h, --help       help for juice
+
+Mode: JUICE_ENV → APP_ENV → NODE_ENV → development; JUICE_REMOTE=1 forces remote.
+--remote and --local are mutually exclusive.
 
 Use "juice [command] --help" for more information about a command.`;
 }
