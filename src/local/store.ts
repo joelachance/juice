@@ -28,7 +28,7 @@ import { assertSegment, scopeSegments } from "../config/secret-path.js";
  */
 const DEFAULT_ENV_NAMES = new Set(["development", "local"]);
 
-export function canonicalEnvName(envName: string): string {
+function canonicalEnvName(envName: string): string {
   return DEFAULT_ENV_NAMES.has(envName.trim().toLowerCase()) ? "development" : envName;
 }
 

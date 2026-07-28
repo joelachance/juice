@@ -1,4 +1,4 @@
-export type Json = Record<string, unknown>;
+type Json = Record<string, unknown>;
 
 export async function requestJson<T>(url: string, init: RequestInit & { token?: string } = {}): Promise<T> {
   const headers = new Headers(init.headers);

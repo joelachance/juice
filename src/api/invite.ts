@@ -13,8 +13,8 @@ import { createHash, randomBytes } from "node:crypto";
  * in a request body rather than a URL path so it stays out of access logs.
  */
 
-export const INVITE_PREFIX = "jc_inv_";
-export const DEFAULT_INVITE_TTL_SECONDS = 24 * 60 * 60;
+const INVITE_PREFIX = "jc_inv_";
+const DEFAULT_INVITE_TTL_SECONDS = 24 * 60 * 60;
 export const MAX_INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export function generateInviteCode(): string {

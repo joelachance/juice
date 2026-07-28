@@ -8,7 +8,7 @@ const JUICE_MARKER_PREFIX = "# juice: added ";
 const KEY_LINE = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
 
 /** Returns the key a line assigns, or undefined. Leading whitespace is allowed. */
-export function dotEnvLineKey(rawLine: string): string | undefined {
+function dotEnvLineKey(rawLine: string): string | undefined {
   return KEY_LINE.exec(rawLine.trim())?.[1];
 }
 

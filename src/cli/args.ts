@@ -85,7 +85,7 @@ function positionalArgs(argv: string[]): string[] {
   return out;
 }
 
-export function flagValue(argv: string[], flag: string): string | undefined {
+function flagValue(argv: string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
   if (index < 0) return undefined;
   const value = argv[index + 1];
@@ -102,7 +102,7 @@ export function flagValue(argv: string[], flag: string): string | undefined {
  * `--scope ""` would put secrets somewhere other than where they were asked to
  * go, and `--scope "$VAR"` with VAR unset is the everyday way to produce it.
  */
-export function flagValues(argv: string[], flag: string): string[] {
+function flagValues(argv: string[], flag: string): string[] {
   const out: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     if (argv[index] !== flag) continue;
@@ -119,7 +119,7 @@ export function flagValues(argv: string[], flag: string): string[] {
   return out;
 }
 
-export function parseTtl(value: string | undefined): number | undefined {
+function parseTtl(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const match = /^(\d+)([smhd])?$/.exec(value);
   if (!match) throw new Error(`Invalid ttl: ${value}`);

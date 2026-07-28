@@ -25,7 +25,7 @@ export type ScopeResolution = {
 };
 
 /** Scopes this machine has used, most recent first. */
-export function knownScopesPath(env: NodeJS.ProcessEnv = process.env): string {
+function knownScopesPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(juiceHome(env), "scopes.json");
 }
 

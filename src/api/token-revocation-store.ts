@@ -11,7 +11,7 @@ export interface TokenRevocationStore {
   revoke(jti: string, owner: string): Promise<void>;
 }
 
-export const REVOCATION_CACHE_TTL_MS = 5000;
+const REVOCATION_CACHE_TTL_MS = 5000;
 
 type RevokedEntry = {
   jti: string;
