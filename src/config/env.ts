@@ -1,9 +1,10 @@
 /**
  * The env axis, and what it implies about where a secret comes from.
  *
- * This file used to also infer a *project* by walking up for `package.json` or
- * `.git`. That inference is gone: scopes are always explicit, so nothing about
- * a secret depends on which directory a process happens to start in.
+ * This file was `project.ts` and inferred a project by walking up for
+ * `package.json` or `.git`. That inference is gone — scopes are always explicit
+ * — so nothing here depends on which directory a process starts in, and the
+ * name no longer described the contents.
  */
 
 export function resolveJuiceEnv(env: NodeJS.ProcessEnv = process.env): string {

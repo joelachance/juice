@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { getToken, setToken } from "../auth/token-store.js";
-import { resolveJuiceEnv, isLocalMode } from "../config/project.js";
+import { resolveJuiceEnv, isLocalMode } from "../config/env.js";
 import { readKnownScopes, rememberScope, resolveScope } from "../config/scope.js";
 import { apiBase, requestJson } from "../http/client.js";
 import { readDotEnv, removeDotEnvKey, setDotEnvValue, type ExportFormat } from "../local/dotenv.js";

@@ -37,7 +37,7 @@
  * network.
  */
 import { getToken } from "../auth/token-store.js";
-import { resolveJuiceEnv, isLocalMode } from "../config/project.js";
+import { resolveJuiceEnv, isLocalMode } from "../config/env.js";
 import { assertScope } from "../config/secret-path.js";
 import { apiBase, requestJson } from "../http/client.js";
 import { readDotEnv } from "../local/dotenv.js";
