@@ -4,6 +4,14 @@ import { mkdirSync } from "node:fs";
 
 const JUICE_MARKER_PREFIX = "# juice: added ";
 
+/** The one place a `KEY=` line is recognised. Everything else must reuse it. */
+const KEY_LINE = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
+
+/** Returns the key a line assigns, or undefined. Leading whitespace is allowed. */
+export function dotEnvLineKey(rawLine: string): string | undefined {
+  return KEY_LINE.exec(rawLine.trim())?.[1];
+}
+
 export function readDotEnv(filePath: string): Record<string, string> {
   if (!existsSync(filePath)) return {};
   const values: Record<string, string> = {};
@@ -40,12 +48,11 @@ export function setDotEnvValue(filePath: string, key: string, value: string, env
   }
 
   const lines = readFileSync(filePath, "utf8").split(/\r?\n/);
-  const keyLine = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
   const kept: string[] = [];
   let replaced = false;
 
   for (const current of lines) {
-    if (keyLine.exec(current)?.[1] === key) {
+    if (dotEnvLineKey(current) === key) {
       // Drop the stale marker that belonged to the value being replaced.
       if (kept.length > 0 && kept[kept.length - 1].startsWith(JUICE_MARKER_PREFIX)) kept.pop();
       if (!replaced) {
@@ -81,14 +88,12 @@ export function removeDotEnvKey(filePath: string, key: string): boolean {
   if (!existsSync(filePath)) return false;
 
   const lines = readFileSync(filePath, "utf8").split(/\r?\n/);
-  const keyLine = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
   const kept: string[] = [];
   let removed = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const match = keyLine.exec(line);
-    if (match?.[1] === key) {
+    if (dotEnvLineKey(line) === key) {
       if (kept.length > 0 && kept[kept.length - 1].startsWith(JUICE_MARKER_PREFIX)) {
         kept.pop();
       }

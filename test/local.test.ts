@@ -45,6 +45,23 @@ test("state fingerprint detects out-of-band .env edits", () => {
   assert.equal(hasEnvDrift(dir, envFile), true);
 });
 
+test("writers match indented key lines that the reader can see", () => {
+  const dir = mkdtempSync(join(tmpdir(), "juice-indent-"));
+  const envFile = join(dir, ".env");
+  // The reader trims; the writers used to match untrimmed, so an indented line
+  // was readable but neither replaceable nor removable — `unset` reported
+  // success while the old secret stayed on disk.
+  writeFileSync(envFile, "  STRIPE=sk_live_LEAKED\n\tOTHER=also-indented\n");
+
+  assert.equal(readDotEnv(envFile).STRIPE, "sk_live_LEAKED");
+  setDotEnvValue(envFile, "STRIPE", "rotated", "development");
+  assert.doesNotMatch(readFileSync(envFile, "utf8"), /sk_live_LEAKED/);
+  assert.equal(readDotEnv(envFile).STRIPE, "rotated");
+
+  assert.equal(removeDotEnvKey(envFile, "OTHER"), true);
+  assert.equal(readDotEnv(envFile).OTHER, undefined);
+});
+
 test("removeDotEnvKey removes key and juice marker while leaving neighbors", () => {
   const dir = mkdtempSync(join(tmpdir(), "juice-unset-"));
   const envFile = join(dir, ".env");
