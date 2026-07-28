@@ -12,14 +12,32 @@ import {
 import { AwsSecretsManagerBackend, secretName, secretPrefix } from "../src/api/aws-secrets-backend.js";
 
 test("secretName builds deterministic AWS Secrets Manager paths", () => {
+  // Not percent-encoded: a Secrets Manager name may only contain
+  // A-Za-z0-9/_+=.@- , so `%` is itself illegal. The old encoding turned every
+  // scoped package name into a name AWS rejects.
   assert.equal(
     secretName({ userId: "123", project: "@scope/demo", env: "production", key: "OPENAI_API_KEY" }),
-    "/juice/users/123/projects/%40scope%2Fdemo/envs/production/secrets/OPENAI_API_KEY"
+    "/juice/users/123/projects/@scope/demo/envs/production/secrets/OPENAI_API_KEY"
   );
   assert.equal(
-    secretPrefix({ userId: "123", project: "@scope/demo", env: "production" }),
-    "/juice/users/123/projects/%40scope%2Fdemo/envs/production/secrets/"
+    secretPrefix({ userId: "123", project: "yeet/agents/fix-auth", env: "production" }),
+    "/juice/users/123/projects/yeet/agents/fix-auth/envs/production/secrets/"
   );
+});
+
+test("secret paths reject anything Secrets Manager would refuse", () => {
+  const base = { userId: "123", env: "production", key: "KEY" };
+  // `%` was the old escape character and is not a legal name character.
+  assert.throws(() => secretName({ ...base, project: "demo%2Fx" }), /scope segment/);
+  assert.throws(() => secretName({ ...base, project: "a b" }), /scope segment/);
+  assert.throws(() => secretName({ ...base, project: "" }), /empty/);
+  // Traversal, which percent-encoding used to hide rather than reject.
+  assert.throws(() => secretName({ ...base, project: "a/../../etc" }), /Invalid scope segment/);
+  assert.throws(() => secretName({ ...base, project: "/leading" }), /leading, trailing/);
+  assert.throws(() => secretName({ ...base, project: "double//slash" }), /leading, trailing/);
+  // `/` in env would make projects/<scope>/envs/<env> ambiguous.
+  assert.throws(() => secretName({ ...base, project: "demo", env: "a/b" }), /Invalid env/);
+  assert.throws(() => secretName({ ...base, project: "demo", key: "a/b" }), /Invalid key/);
 });
 
 test("putSecret creates missing AWS secret", async () => {

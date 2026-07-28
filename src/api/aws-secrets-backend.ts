@@ -8,6 +8,7 @@ import {
   ResourceNotFoundException,
   SecretsManagerClient
 } from "@aws-sdk/client-secrets-manager";
+import { assertScope, assertSegment } from "../config/secret-path.js";
 import type { SecretListRef, SecretRef, SecretsBackend } from "./secrets-backend.js";
 
 export class AwsSecretsManagerBackend implements SecretsBackend {
@@ -40,8 +41,8 @@ export class AwsSecretsManagerBackend implements SecretsBackend {
 
   /**
    * ListSecrets cannot be IAM-scoped by name prefix. Callers must only pass a
-   * ref derived from the authenticated principal; this method still filters to
-   * that exact prefix so account-wide enumeration cannot leak other tenants.
+   * ref derived from the authenticated principal; this method still filters
+   * to that exact prefix so enumeration cannot leak other tenants.
    */
   async listKeys(ref: SecretListRef): Promise<string[]> {
     const prefix = secretPrefix(ref);
@@ -57,7 +58,7 @@ export class AwsSecretsManagerBackend implements SecretsBackend {
         const name = secret.Name;
         if (!name || !name.startsWith(prefix)) continue;
         const key = name.slice(prefix.length);
-        if (key && !key.includes("/")) keys.add(decodeURIComponent(key));
+        if (key && !key.includes("/")) keys.add(key);
       }
       nextToken = response.NextToken;
     } while (nextToken);
@@ -78,17 +79,19 @@ export class AwsSecretsManagerBackend implements SecretsBackend {
 }
 
 export function secretName(ref: SecretRef): string {
-  return `${secretPrefix(ref)}${segment(ref.key)}`;
+  return `${secretPrefix(ref)}${assertSegment("key", ref.key)}`;
 }
 
+/**
+ * The tenant-isolation boundary for `listKeys`, so every component is validated
+ * rather than escaped — see ../config/secret-path.ts for why `/` is allowed in
+ * the project and nowhere else.
+ */
 export function secretPrefix(ref: SecretListRef): string {
-  return `/juice/users/${segment(ref.userId)}/projects/${segment(ref.project)}/envs/${segment(ref.env)}/secrets/`;
-}
-
-function segment(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) throw new Error("Secret path segments cannot be empty.");
-  return encodeURIComponent(trimmed);
+  const userId = assertSegment("user id", ref.userId);
+  const project = assertScope(ref.project);
+  const env = assertSegment("env", ref.env);
+  return `/juice/users/${userId}/projects/${project}/envs/${env}/secrets/`;
 }
 
 function isNotFound(error: unknown): boolean {
