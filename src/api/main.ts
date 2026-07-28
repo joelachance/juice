@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { loadJuiceEnv } from "../local/bootstrap-env.js";
+import { loadServerEnvFile } from "./env-file.js";
 import { createJuiceServer } from "./server.js";
 
-loadJuiceEnv();
+// JUICE_ENV_FILE, else ./.env. The real environment always wins over it.
+loadServerEnvFile();
 
 const port = Number.parseInt(process.env.PORT || "8787", 10);
 const host = process.env.HOST || "0.0.0.0";
