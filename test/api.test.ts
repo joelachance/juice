@@ -98,7 +98,7 @@ test("API stores secrets under the authenticated GitHub user namespace", async (
     revocationStore: new MemoryTokenRevocationStore()
   });
   const port = await listen(server);
-  const token = signToken({ sub: "github:123" }, TEST_SECRET);
+  const token = signToken({ sub: "github:123", acc: "acc_123" }, TEST_SECRET);
 
   const response = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/development/secrets/KEY`, {
     method: "PUT",
@@ -109,7 +109,7 @@ test("API stores secrets under the authenticated GitHub user namespace", async (
   server.close();
   assert.equal(response.status, 204);
   assert.deepEqual(writes, [{
-    ref: { userId: "123", project: "demo", env: "development", key: "KEY" },
+    ref: { accountId: "acc_123", project: "demo", env: "development", key: "KEY" },
     value: "secret"
   }]);
 });
@@ -119,8 +119,8 @@ test("expired and revoked tokens are rejected", async () => {
   const backend = valueBackend("secret");
   const server = createJuiceServer({ backend, tokenSecret: TEST_SECRET, revocationStore });
   const port = await listen(server);
-  const expired = signToken({ sub: "github:1" }, TEST_SECRET, { now: 100, ttlSeconds: 60 });
-  const revoked = signToken({ sub: "github:1" }, TEST_SECRET, { jti: "revoked-token" });
+  const expired = signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET, { now: 100, ttlSeconds: 60 });
+  const revoked = signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET, { jti: "revoked-token" });
   await revocationStore.revoke("revoked-token", "github:1");
 
   const expiredResponse = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets/KEY`, {
@@ -137,7 +137,7 @@ test("expired and revoked tokens are rejected", async () => {
 
 test("user tokens carry exp, iat, jti, iss and aud", () => {
   const now = 1_800_000_000;
-  const token = signToken({ sub: "github:1" }, TEST_SECRET, { now });
+  const token = signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET, { now });
   const principal = verifyToken(token, TEST_SECRET, now + 1);
 
   assert(principal);
@@ -156,7 +156,7 @@ test("machine token scope limits project, env and action", async () => {
     revocationStore: new MemoryTokenRevocationStore()
   });
   const port = await listen(server);
-  const userToken = signToken({ sub: "github:1" }, TEST_SECRET);
+  const userToken = signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET);
 
   const createResponse = await fetch(`http://127.0.0.1:${port}/tokens`, {
     method: "POST",
@@ -202,6 +202,7 @@ test("machine tokens cannot create tokens", async () => {
   const port = await listen(server);
   const machineToken = signToken({
     sub: "github:1",
+    acc: "acc_1",
     scope: { project: "projA", env: "dev", actions: ["read", "write"] }
   }, TEST_SECRET);
 
@@ -226,7 +227,7 @@ test("tokens can revoke themselves and are rejected afterwards", async () => {
     revocationStore
   });
   const port = await listen(server);
-  const token = signToken({ sub: "github:1" }, TEST_SECRET, { jti: "self-token" });
+  const token = signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET, { jti: "self-token" });
 
   const revokeResponse = await fetch(`http://127.0.0.1:${port}/tokens/self-token`, {
     method: "DELETE",
@@ -248,8 +249,8 @@ test("users cannot revoke another user's token", async () => {
     revocationStore: new MemoryTokenRevocationStore()
   });
   const port = await listen(server);
-  const userAToken = signToken({ sub: "github:1" }, TEST_SECRET, { jti: "user-a" });
-  const userBToken = signToken({ sub: "github:2" }, TEST_SECRET, { jti: "user-b" });
+  const userAToken = signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET, { jti: "user-a" });
+  const userBToken = signToken({ sub: "github:2", acc: "acc_2" }, TEST_SECRET, { jti: "user-b" });
 
   const revokeResponse = await fetch(`http://127.0.0.1:${port}/tokens/user-b`, {
     method: "DELETE",
@@ -272,7 +273,7 @@ test("token revoke rejects target tokens whose jti mismatches the path", async (
     revocationStore: new MemoryTokenRevocationStore()
   });
   const port = await listen(server);
-  const userToken = signToken({ sub: "github:1" }, TEST_SECRET, { jti: "actual-jti" });
+  const userToken = signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET, { jti: "actual-jti" });
 
   const response = await fetch(`http://127.0.0.1:${port}/tokens/other-jti`, {
     method: "DELETE",
@@ -328,7 +329,7 @@ test("bad JSON returns 400 and bodies over 64 KB return 413", async () => {
     revocationStore: new MemoryTokenRevocationStore()
   });
   const port = await listen(server);
-  const token = signToken({ sub: "github:1" }, TEST_SECRET);
+  const token = signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET);
   const url = `http://127.0.0.1:${port}/projects/demo/envs/dev/secrets/KEY`;
 
   const badJson = await fetch(url, {
@@ -363,7 +364,7 @@ test("500 responses are sanitized and include request ids", async () => {
     revocationStore: new MemoryTokenRevocationStore()
   });
   const port = await listen(server);
-  const token = signToken({ sub: "github:1" }, TEST_SECRET);
+  const token = signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET);
 
   const response = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets/KEY`, {
     headers: { authorization: `Bearer ${token}` }
@@ -378,10 +379,10 @@ test("500 responses are sanitized and include request ids", async () => {
 
 test("list returns only the caller's keys (cross-user isolation)", async () => {
   const backend = memoryBackend([
-    { ref: { userId: "1", project: "demo", env: "dev", key: "ALPHA" }, value: "a" },
-    { ref: { userId: "1", project: "demo", env: "dev", key: "BETA" }, value: "b" },
-    { ref: { userId: "2", project: "demo", env: "dev", key: "OTHER" }, value: "leak-me" },
-    { ref: { userId: "2", project: "demo", env: "dev", key: "SECRET" }, value: "nope" }
+    { ref: { accountId: "acc_1", project: "demo", env: "dev", key: "ALPHA" }, value: "a" },
+    { ref: { accountId: "acc_1", project: "demo", env: "dev", key: "BETA" }, value: "b" },
+    { ref: { accountId: "acc_2", project: "demo", env: "dev", key: "OTHER" }, value: "leak-me" },
+    { ref: { accountId: "acc_2", project: "demo", env: "dev", key: "SECRET" }, value: "nope" }
   ]);
   const logs: string[] = [];
   const previousLog = console.log;
@@ -394,7 +395,7 @@ test("list returns only the caller's keys (cross-user isolation)", async () => {
     revocationStore: new MemoryTokenRevocationStore()
   });
   const port = await listen(server);
-  const tokenA = signToken({ sub: "github:1" }, TEST_SECRET);
+  const tokenA = signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET);
 
   try {
     const response = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets`, {
@@ -404,7 +405,7 @@ test("list returns only the caller's keys (cross-user isolation)", async () => {
 
     assert.equal(response.status, 200);
     assert.deepEqual(body.keys, ["ALPHA", "BETA"]);
-    assert.deepEqual(backend.listed, [{ userId: "1", project: "demo", env: "dev" }]);
+    assert.deepEqual(backend.listed, [{ accountId: "acc_1", project: "demo", env: "dev" }]);
     assert.equal(logs.some((line) => line.includes('"action":"list"') && line.includes('"outcome":"ok"')), true);
     assert.equal(logs.some((line) => /leak-me|nope|"value"/.test(line)), false);
   } finally {
@@ -415,13 +416,15 @@ test("list returns only the caller's keys (cross-user isolation)", async () => {
 
 test("?values=1 returns the caller's secrets in one request and audits each key", async () => {
   const backend = memoryBackend([
-    { ref: { userId: "1", project: "demo", env: "dev", key: "ALPHA" }, value: "a" },
-    { ref: { userId: "1", project: "demo", env: "dev", key: "BETA" }, value: "b" },
-    { ref: { userId: "2", project: "demo", env: "dev", key: "OTHER" }, value: "leak-me" }
+    { ref: { accountId: "acc_1", project: "demo", env: "dev", key: "ALPHA" }, value: "a" },
+    { ref: { accountId: "acc_1", project: "demo", env: "dev", key: "BETA" }, value: "b" },
+    { ref: { accountId: "acc_2", project: "demo", env: "dev", key: "OTHER" }, value: "leak-me" }
   ]);
   const logs: string[] = [];
   const previousLog = console.log;
-  console.log = (message?: unknown) => { logs.push(String(message)); };
+  console.log = (message?: unknown) => {
+    logs.push(String(message));
+  };
   const server = createJuiceServer({
     backend,
     tokenSecret: TEST_SECRET,
@@ -431,7 +434,7 @@ test("?values=1 returns the caller's secrets in one request and audits each key"
 
   try {
     const response = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets?values=1`, {
-      headers: { authorization: `Bearer ${signToken({ sub: "github:1" }, TEST_SECRET)}` }
+      headers: { authorization: `Bearer ${signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET)}` }
     });
     const body = await response.json() as { keys?: string[]; secrets?: Record<string, string> };
 
@@ -440,7 +443,7 @@ test("?values=1 returns the caller's secrets in one request and audits each key"
     assert.deepEqual(body.secrets, { ALPHA: "a", BETA: "b" });
     // Bulk must not be a quieter path than N gets: one read record per key.
     assert.equal(logs.filter((line) => line.includes('"action":"read"')).length, 2);
-    assert.equal(logs.some((line) => /leak-me|"value"/.test(line)), false);
+    assert.equal(logs.some((line) => /leak-me|"value"|"a"|"b"/.test(line)), false);
   } finally {
     console.log = previousLog;
     server.close();
@@ -449,7 +452,7 @@ test("?values=1 returns the caller's secrets in one request and audits each key"
 
 test("?values=1 is refused for a read-only token scoped to another project", async () => {
   const backend = memoryBackend([
-    { ref: { userId: "1", project: "other", env: "dev", key: "KEY" }, value: "secret" }
+    { ref: { accountId: "acc_1", project: "other", env: "dev", key: "KEY" }, value: "secret" }
   ]);
   const server = createJuiceServer({
     backend,
@@ -460,7 +463,7 @@ test("?values=1 is refused for a read-only token scoped to another project", asy
 
   try {
     const scoped = signToken(
-      { sub: "github:1", scope: { project: "demo", env: "dev", actions: ["read"] } },
+      { sub: "github:1", acc: "acc_1", scope: { project: "demo", env: "dev", actions: ["read"] } },
       TEST_SECRET
     );
     const response = await fetch(`http://127.0.0.1:${port}/projects/other/envs/dev/secrets?values=1`, {
@@ -475,7 +478,7 @@ test("?values=1 is refused for a read-only token scoped to another project", asy
 
 test("unset deletes with write authz; read-only machine token gets 403", async () => {
   const backend = memoryBackend([
-    { ref: { userId: "1", project: "demo", env: "dev", key: "KEY" }, value: "secret" }
+    { ref: { accountId: "acc_1", project: "demo", env: "dev", key: "KEY" }, value: "secret" }
   ]);
   const logs: string[] = [];
   const previousLog = console.log;
@@ -490,10 +493,12 @@ test("unset deletes with write authz; read-only machine token gets 403", async (
   const port = await listen(server);
   const readOnly = signToken({
     sub: "github:1",
+    acc: "acc_1",
     scope: { project: "demo", env: "dev", actions: ["read"] }
   }, TEST_SECRET);
   const writer = signToken({
     sub: "github:1",
+    acc: "acc_1",
     scope: { project: "demo", env: "dev", actions: ["read", "write"] }
   }, TEST_SECRET);
 
@@ -509,14 +514,14 @@ test("unset deletes with write authz; read-only machine token gets 403", async (
       headers: { authorization: `Bearer ${readOnly}` }
     });
     assert.equal(denied.status, 403);
-    assert.equal(backend.store.has("1/demo/dev/KEY"), true);
+    assert.equal(backend.store.has("acc_1/demo/dev/KEY"), true);
 
     const deleted = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets/KEY`, {
       method: "DELETE",
       headers: { authorization: `Bearer ${writer}` }
     });
     assert.equal(deleted.status, 204);
-    assert.equal(backend.store.has("1/demo/dev/KEY"), false);
+    assert.equal(backend.store.has("acc_1/demo/dev/KEY"), false);
 
     const again = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets/KEY`, {
       method: "DELETE",
@@ -548,11 +553,11 @@ function valueBackend(value: string): SecretsBackend {
 function memoryBackend(initial: Array<{ ref: SecretRef; value: string }> = []): SecretsBackend & {
   store: Map<string, string>;
   deleted: SecretRef[];
-  listed: Array<{ userId: string; project: string; env: string }>;
+  listed: Array<{ accountId: string; project: string; env: string }>;
 } {
   const store = new Map(initial.map(({ ref, value }) => [secretKey(ref), value]));
   const deleted: SecretRef[] = [];
-  const listed: Array<{ userId: string; project: string; env: string }> = [];
+  const listed: Array<{ accountId: string; project: string; env: string }> = [];
   return {
     store,
     deleted,
@@ -565,7 +570,7 @@ function memoryBackend(initial: Array<{ ref: SecretRef; value: string }> = []): 
     },
     async listKeys(ref) {
       listed.push(ref);
-      const prefix = `${ref.userId}/${ref.project}/${ref.env}/`;
+      const prefix = `${ref.accountId}/${ref.project}/${ref.env}/`;
       return [...store.keys()]
         .filter((key) => key.startsWith(prefix))
         .map((key) => key.slice(prefix.length))
@@ -579,7 +584,7 @@ function memoryBackend(initial: Array<{ ref: SecretRef; value: string }> = []): 
 }
 
 function secretKey(ref: SecretRef): string {
-  return `${ref.userId}/${ref.project}/${ref.env}/${ref.key}`;
+  return `${ref.accountId}/${ref.project}/${ref.env}/${ref.key}`;
 }
 
 async function listen(server: ReturnType<typeof createJuiceServer>): Promise<number> {

@@ -41,7 +41,7 @@ export class AwsSecretsManagerBackend implements SecretsBackend {
 
   /**
    * ListSecrets cannot be IAM-scoped by name prefix. Callers must only pass a
-   * ref derived from the authenticated principal; this method still filters
+   * ref whose accountId came from the verified token; this method still filters
    * to that exact prefix so enumeration cannot leak other tenants.
    */
   async listKeys(ref: SecretListRef): Promise<string[]> {
@@ -88,10 +88,10 @@ export function secretName(ref: SecretRef): string {
  * the project and nowhere else.
  */
 export function secretPrefix(ref: SecretListRef): string {
-  const userId = assertSegment("user id", ref.userId);
+  const accountId = assertSegment("account id", ref.accountId);
   const project = assertScope(ref.project);
   const env = assertSegment("env", ref.env);
-  return `/juice/users/${userId}/projects/${project}/envs/${env}/secrets/`;
+  return `/juice/accounts/${accountId}/projects/${project}/envs/${env}/secrets/`;
 }
 
 function isNotFound(error: unknown): boolean {

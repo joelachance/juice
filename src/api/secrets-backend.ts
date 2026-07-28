@@ -1,12 +1,12 @@
 export type SecretRef = {
-  userId: string;
+  accountId: string;
   project: string;
   env: string;
   key: string;
 };
 
 export type SecretListRef = {
-  userId: string;
+  accountId: string;
   project: string;
   env: string;
 };

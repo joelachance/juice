@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { AwsSecretsManagerBackend } from "./aws-secrets-backend.js";
+import { membershipStoreFromEnv } from "./convex-membership-store.js";
+import type { MembershipStore } from "./membership-store.js";
 import type { SecretRef, SecretsBackend } from "./secrets-backend.js";
 import {
   MACHINE_TOKEN_MAX_TTL_SECONDS,
@@ -31,6 +33,7 @@ export type JuiceServerOptions = {
   githubClientId?: string;
   authorize?: (request: AccessRequest) => boolean | Promise<boolean>;
   revocationStore?: TokenRevocationStore;
+  membershipStore?: MembershipStore;
 };
 
 export function createJuiceServer(options: JuiceServerOptions = {}): Server {
@@ -38,6 +41,9 @@ export function createJuiceServer(options: JuiceServerOptions = {}): Server {
   const signingSecret = tokenSecret(options);
   const authorize = options.authorize ?? ownerOnlyAuthorize;
   const revocationStore = options.revocationStore ?? new AwsSecretsManagerTokenRevocationStore();
+  // Without a configured membership store there is no way to resolve an
+  // account, so login must fail loudly rather than invent one.
+  const membership = options.membershipStore ?? membershipStoreFromEnv();
   const authLimiter = new TokenBucketLimiter(20, 60_000);
   const principalLimiter = new TokenBucketLimiter(120, 60_000);
 
@@ -68,7 +74,7 @@ export function createJuiceServer(options: JuiceServerOptions = {}): Server {
           return;
         }
         if (req.method === "POST" && url.pathname === "/auth/github/complete") {
-          await handleGithubComplete(req, res, options, signingSecret, requestId);
+          await handleGithubComplete(req, res, options, signingSecret, requestId, membership);
           return;
         }
       }
@@ -130,14 +136,9 @@ export function createJuiceServer(options: JuiceServerOptions = {}): Server {
         return;
       }
 
-      const userId = githubUserId(principal.sub);
-      if (!userId) {
-        auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "unauthorized" });
-        sendJson(res, 401, { requestId, error: "Unauthorized" });
-        return;
-      }
-
-      const ref: SecretRef = { userId, ...refBase };
+      // The account is read off the verified token and never from the request,
+      // so a caller cannot address someone else's namespace by construction.
+      const ref: SecretRef = { accountId: principal.acc, ...refBase };
       if (!await authorizeAccess(authorize, { ...ref, action, principal })) {
         auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "forbidden" });
         sendJson(res, 403, { requestId, error: "Forbidden" });
@@ -170,6 +171,9 @@ export function createJuiceServer(options: JuiceServerOptions = {}): Server {
         return;
       }
       await backend.putSecret(ref, body.value);
+      // Records that this account now owns data. Redeeming an invite may
+      // discard an untouched personal account, and must never discard this one.
+      if (membership) await membership.markAccountUsed(principal.acc).catch(() => undefined);
       auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "ok" });
       sendJson(res, 204, {});
     } catch (error) {
@@ -219,14 +223,7 @@ async function handleSecretList(
     return;
   }
 
-  const userId = githubUserId(principal.sub);
-  if (!userId) {
-    auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "unauthorized" });
-    sendJson(res, 401, { requestId, error: "Unauthorized" });
-    return;
-  }
-
-  const probe: SecretRef = { userId, ...refBase, key: "__list__" };
+  const probe: SecretRef = { accountId: principal.acc, ...refBase, key: "__list__" };
   if (!await authorizeAccess(authorize, { ...probe, action, principal })) {
     auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "forbidden" });
     sendJson(res, 403, { requestId, error: "Forbidden" });
@@ -234,7 +231,7 @@ async function handleSecretList(
   }
 
   // Tenant isolation: listKeys must only ever be called with the caller's userId.
-  const keys = await backend.listKeys({ userId, project: refBase.project, env: refBase.env });
+  const keys = await backend.listKeys({ accountId: principal.acc, project: refBase.project, env: refBase.env });
   auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "ok" });
 
   if (!withValues) {
@@ -248,7 +245,7 @@ async function handleSecretList(
   // would have produced. Only the round trips collapse.
   const secrets: Record<string, string> = {};
   for (const key of keys) {
-    const value = await backend.getSecret({ userId, ...refBase, key });
+    const value = await backend.getSecret({ accountId: principal.acc, ...refBase, key });
     if (value === undefined) continue;
     secrets[key] = value;
     auditSecretAccess({ requestId, principal: principal.sub, action: "read", ...refBase, key, outcome: "ok" });
@@ -293,11 +290,16 @@ async function handleGithubComplete(
   res: ServerResponse,
   options: JuiceServerOptions,
   signingSecret: string,
-  requestId: string
+  requestId: string,
+  membership: MembershipStore | undefined
 ): Promise<void> {
   const clientId = options.githubClientId || process.env.GITHUB_CLIENT_ID || process.env.GITHUB_OAUTH_CLIENT_ID;
   if (!clientId) {
     sendJson(res, 501, { requestId, error: "GITHUB_CLIENT_ID is required for GitHub OAuth login" });
+    return;
+  }
+  if (!membership) {
+    sendJson(res, 501, { requestId, error: "Login needs JUICE_CONVEX_URL (the .convex.site URL) and JUICE_CONVEX_SECRET (same value as JUICE_API_SHARED_SECRET in Convex)" });
     return;
   }
   const body = await readJson<{ device_code?: unknown }>(req);
@@ -334,10 +336,23 @@ async function handleGithubComplete(
     sendJson(res, 502, { requestId, error: "GitHub user lookup failed" });
     return;
   }
+  // Resolve (or create, on first login) the account this identity acts as. The
+  // account, not the GitHub id, is what secrets are stored under — which is why
+  // adding a second login provider later renames nothing.
+  const account = await membership.resolveAccount({
+    provider: "github",
+    subject: String(user.id),
+    login: user.login
+  });
   sendJson(res, 200, {
     requestId,
-    token: signToken({ sub: `github:${user.id}`, login: user.login }, signingSecret, { ttlSeconds: USER_TOKEN_TTL_SECONDS }),
+    token: signToken(
+      { sub: `github:${user.id}`, acc: account.accountId, login: user.login },
+      signingSecret,
+      { ttlSeconds: USER_TOKEN_TTL_SECONDS }
+    ),
     login: user.login,
+    account: { id: account.accountId, name: account.accountName, created: account.created },
     expiresIn: USER_TOKEN_TTL_SECONDS
   });
 }
@@ -365,14 +380,9 @@ async function handleTokenCreate(
     sendJson(res, 400, { requestId, error: "project and env are required" });
     return;
   }
-  const userId = githubUserId(principal.sub);
-  if (!userId) {
-    sendJson(res, 401, { requestId, error: "Unauthorized" });
-    return;
-  }
   const actions: TokenAction[] = body.readOnly === true ? ["read"] : ["read", "write"];
   const ttlSeconds = normalizeMachineTokenTtl(body.ttlSeconds);
-  const probeRef = { userId, project: body.project, env: body.env, key: "__token_scope_probe__" };
+  const probeRef = { accountId: principal.acc, project: body.project, env: body.env, key: "__token_scope_probe__" };
   for (const action of actions) {
     if (!await authorizeAccess(authorize, { ...probeRef, action, principal })) {
       sendJson(res, 403, { requestId, error: "Forbidden" });
@@ -383,6 +393,7 @@ async function handleTokenCreate(
   const jti = randomUUID();
   const token = signToken({
     sub: principal.sub,
+    acc: principal.acc,
     login: principal.login,
     scope: { project: body.project, env: body.env, actions }
   }, signingSecret, { ttlSeconds, jti });
@@ -455,7 +466,8 @@ function tokenSecret(options: JuiceServerOptions): string {
 }
 
 function ownerOnlyAuthorize(request: AccessRequest): boolean {
-  return githubUserId(request.principal.sub) === request.userId;
+  // A token can only ever name its own account, so there is nothing to compare.
+  return request.principal.acc === request.accountId;
 }
 
 async function authorizeAccess(

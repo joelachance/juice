@@ -16,17 +16,17 @@ test("secretName builds deterministic AWS Secrets Manager paths", () => {
   // A-Za-z0-9/_+=.@- , so `%` is itself illegal. The old encoding turned every
   // scoped package name into a name AWS rejects.
   assert.equal(
-    secretName({ userId: "123", project: "@scope/demo", env: "production", key: "OPENAI_API_KEY" }),
-    "/juice/users/123/projects/@scope/demo/envs/production/secrets/OPENAI_API_KEY"
+    secretName({ accountId: "acc_123", project: "@scope/demo", env: "production", key: "OPENAI_API_KEY" }),
+    "/juice/accounts/acc_123/projects/@scope/demo/envs/production/secrets/OPENAI_API_KEY"
   );
   assert.equal(
-    secretPrefix({ userId: "123", project: "yeet/agents/fix-auth", env: "production" }),
-    "/juice/users/123/projects/yeet/agents/fix-auth/envs/production/secrets/"
+    secretPrefix({ accountId: "acc_123", project: "yeet/agents/fix-auth", env: "production" }),
+    "/juice/accounts/acc_123/projects/yeet/agents/fix-auth/envs/production/secrets/"
   );
 });
 
 test("secret paths reject anything Secrets Manager would refuse", () => {
-  const base = { userId: "123", env: "production", key: "KEY" };
+  const base = { accountId: "acc_123", env: "production", key: "KEY" };
   // `%` was the old escape character and is not a legal name character.
   assert.throws(() => secretName({ ...base, project: "demo%2Fx" }), /scope segment/);
   assert.throws(() => secretName({ ...base, project: "a b" }), /scope segment/);
@@ -53,7 +53,7 @@ test("putSecret creates missing AWS secret", async () => {
   };
   const backend = new AwsSecretsManagerBackend(client as never);
 
-  await backend.putSecret({ userId: "123", project: "demo", env: "production", key: "KEY" }, "value");
+  await backend.putSecret({ accountId: "acc_123", project: "demo", env: "production", key: "KEY" }, "value");
 
   assert.deepEqual(sent, ["DescribeSecretCommand", "CreateSecretCommand"]);
 });
@@ -68,7 +68,7 @@ test("putSecret updates existing AWS secret", async () => {
   };
   const backend = new AwsSecretsManagerBackend(client as never);
 
-  await backend.putSecret({ userId: "123", project: "demo", env: "production", key: "KEY" }, "value");
+  await backend.putSecret({ accountId: "acc_123", project: "demo", env: "production", key: "KEY" }, "value");
 
   assert.deepEqual(sent, ["DescribeSecretCommand", "PutSecretValueCommand"]);
 });
@@ -82,11 +82,11 @@ test("getSecret reads one AWS secret value", async () => {
   };
   const backend = new AwsSecretsManagerBackend(client as never);
 
-  assert.equal(await backend.getSecret({ userId: "123", project: "demo", env: "production", key: "KEY" }), "value");
+  assert.equal(await backend.getSecret({ accountId: "acc_123", project: "demo", env: "production", key: "KEY" }), "value");
 });
 
 test("listKeys filters to the caller prefix even when ListSecrets returns other tenants", async () => {
-  const prefix = secretPrefix({ userId: "1", project: "demo", env: "dev" });
+  const prefix = secretPrefix({ accountId: "acc_1", project: "demo", env: "dev" });
   const client = {
     async send(command: unknown) {
       assert(command instanceof ListSecretsCommand);
@@ -95,7 +95,7 @@ test("listKeys filters to the caller prefix even when ListSecrets returns other 
         SecretList: [
           { Name: `${prefix}ALPHA` },
           { Name: `${prefix}BETA` },
-          { Name: "/juice/users/2/projects/demo/envs/dev/secrets/OTHER" },
+          { Name: "/juice/accounts/acc_2/projects/demo/envs/dev/secrets/OTHER" },
           { Name: `${prefix}nested/bad` },
           { Name: undefined }
         ]
@@ -103,7 +103,7 @@ test("listKeys filters to the caller prefix even when ListSecrets returns other 
     }
   };
   const backend = new AwsSecretsManagerBackend(client as never);
-  assert.deepEqual(await backend.listKeys({ userId: "1", project: "demo", env: "dev" }), ["ALPHA", "BETA"]);
+  assert.deepEqual(await backend.listKeys({ accountId: "acc_1", project: "demo", env: "dev" }), ["ALPHA", "BETA"]);
 });
 
 test("deleteSecret uses a 7-day recovery window and is idempotent", async () => {
@@ -121,7 +121,7 @@ test("deleteSecret uses a 7-day recovery window and is idempotent", async () => 
     }
   };
   const backend = new AwsSecretsManagerBackend(client as never);
-  const ref = { userId: "123", project: "demo", env: "production", key: "KEY" };
+  const ref = { accountId: "acc_123", project: "demo", env: "production", key: "KEY" };
 
   await backend.deleteSecret(ref);
   missing = true;

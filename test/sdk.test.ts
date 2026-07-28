@@ -94,7 +94,7 @@ test("a missing secret names the command that would create it", async () => {
 test("juice.scope fetches one remote key in non-local mode", async () => {
   const backend: SecretsBackend = {
     async getSecret(ref) {
-      assert.deepEqual(ref, { userId: "1", project: "myapp", env: "production", key: "OPENAI_API_KEY" });
+      assert.deepEqual(ref, { accountId: "acc_1", project: "myapp", env: "production", key: "OPENAI_API_KEY" });
       return "remote-key";
     },
     async putSecret() { throw new Error("unexpected write"); },
@@ -203,7 +203,7 @@ function remoteEnv(port: number): NodeJS.ProcessEnv {
   return {
     JUICE_ENV: "production",
     JUICE_API_URL: `http://127.0.0.1:${port}`,
-    JUICE_TOKEN: signToken({ sub: "github:1" }, TEST_SECRET)
+    JUICE_TOKEN: signToken({ sub: "github:1", acc: "acc_1" }, TEST_SECRET)
   } as NodeJS.ProcessEnv;
 }
 

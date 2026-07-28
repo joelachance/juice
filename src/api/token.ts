@@ -14,7 +14,10 @@ export type TokenScope = {
 };
 
 export type AuthPrincipal = {
+  /** Who acted. Stays a login identity ("github:123") so the audit log names a person. */
   sub: string;
+  /** Whose data. The account the token may address; never taken from the request. */
+  acc: string;
   login?: string;
   iat: number;
   exp: number;
@@ -31,7 +34,7 @@ export type SignTokenOptions = {
 };
 
 export function signToken(
-  principal: Pick<AuthPrincipal, "sub" | "login" | "scope">,
+  principal: Pick<AuthPrincipal, "sub" | "acc" | "login" | "scope">,
   secret: string,
   options: SignTokenOptions = {}
 ): string {

@@ -30,6 +30,23 @@ export class JuiceApiStack extends Stack {
       description: "GitHub OAuth application client ID used by juice auth login."
     });
 
+    const convexUrl = new CfnParameter(this, "ConvexUrl", {
+      type: "String",
+      description: "Convex HTTP Actions URL for the membership store, e.g. https://<deployment>.convex.site"
+    });
+
+    /**
+     * An ARN rather than the value itself. A CfnParameter is readable in the
+     * CloudFormation console and stored with the stack, so passing the shared
+     * secret directly would publish it. Create the secret out of band, populate
+     * it with the same value as Convex's JUICE_API_SHARED_SECRET, and pass its
+     * ARN here.
+     */
+    const convexSecretArn = new CfnParameter(this, "ConvexSharedSecretArn", {
+      type: "String",
+      description: "COMPLETE ARN (including the trailing 6-character suffix, e.g. ...-PJOkpC) of a Secrets Manager secret holding the Convex shared secret. Must match JUICE_API_SHARED_SECRET in Convex."
+    });
+
     const versionCommit = new CfnParameter(this, "VersionCommit", {
       type: "String",
       default: buildVersionCommit,
@@ -70,6 +87,12 @@ export class JuiceApiStack extends Stack {
 
     const cluster = new ecs.Cluster(this, "Cluster", { vpc });
 
+    const convexSharedSecret = secretsmanager.Secret.fromSecretCompleteArn(
+      this,
+      "ConvexSharedSecret",
+      convexSecretArn.valueAsString
+    );
+
     const tokenSecret = new secretsmanager.Secret(this, "TokenSecret", {
       description: "JWT signing secret for Juice API tokens.",
       generateSecretString: {
@@ -108,12 +131,14 @@ export class JuiceApiStack extends Stack {
         environment: {
           AWS_REGION: Stack.of(this).region,
           GITHUB_CLIENT_ID: githubClientId.valueAsString,
+          JUICE_CONVEX_URL: convexUrl.valueAsString,
           JUICE_VERSION_COMMIT: versionCommit.valueAsString,
           NODE_ENV: "production",
           PORT: "8787"
         },
         secrets: {
-          JUICE_TOKEN_SECRET: ecs.Secret.fromSecretsManager(tokenSecret)
+          JUICE_TOKEN_SECRET: ecs.Secret.fromSecretsManager(tokenSecret),
+          JUICE_CONVEX_SECRET: ecs.Secret.fromSecretsManager(convexSharedSecret)
         },
         logDriver: ecs.LogDrivers.awsLogs({
           streamPrefix: "juice-api",
@@ -132,7 +157,9 @@ export class JuiceApiStack extends Stack {
 
     tokenSecret.grantRead(service.taskDefinition.taskRole);
 
-    const juiceSecretNamespaceArn = `arn:${Stack.of(this).partition}:secretsmanager:${Stack.of(this).region}:${Stack.of(this).account}:secret:/juice/users/*/projects/*`;
+    convexSharedSecret.grantRead(service.taskDefinition.taskRole);
+
+    const juiceSecretNamespaceArn = `arn:${Stack.of(this).partition}:secretsmanager:${Stack.of(this).region}:${Stack.of(this).account}:secret:/juice/accounts/*/projects/*`;
     const tokenRevocationsArn = `arn:${Stack.of(this).partition}:secretsmanager:${Stack.of(this).region}:${Stack.of(this).account}:secret:/juice/token-revocations*`;
     service.taskDefinition.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: [
@@ -149,14 +176,14 @@ export class JuiceApiStack extends Stack {
       conditions: {
         StringLike: {
           "secretsmanager:Name": [
-            "/juice/users/*/projects/*",
+            "/juice/accounts/*/projects/*",
             "/juice/token-revocations"
           ]
         }
       }
     }));
     // ListSecrets cannot be IAM-scoped by name prefix; the API filters results to
-    // /juice/users/<caller-id>/… before returning keys (tenant isolation boundary).
+    // /juice/accounts/<token account>/… before returning keys (tenant isolation boundary).
     service.taskDefinition.taskRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ["secretsmanager:ListSecrets"],
       resources: ["*"]
