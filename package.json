@@ -1,7 +1,7 @@
 {
   "name": "@juice/sdk",
   "version": "0.1.0",
-  "description": "Minimal agent secrets management backed by local .env files and AWS Secrets Manager.",
+  "description": "Agent secrets without copy/paste: an explicit-scope CLI and SDK backed by a local store or AWS Secrets Manager.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
@@ -23,15 +23,21 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "cdk": "cdk",
-    "cdk:deploy": "cdk deploy",
-    "cdk:synth": "cdk synth",
     "dev": "npm run build && node scripts/run-api-local.mjs",
+    "cli": "npm run build && node dist/src/cli/main.js",
+    "link": "npm run build && npm link",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "verify": "npm test && npm run check:licenses && npm run check:pack",
+    "check:licenses": "node scripts/check-licenses.mjs",
+    "check:pack": "node scripts/check-pack.mjs",
     "test:api-local": "npm run build && node scripts/test-api-local.mjs",
     "start:api": "node dist/src/api/main.js",
-    "test": "npm run build && node --test dist/test/*.test.js",
-    "check:licenses": "node scripts/check-licenses.mjs",
-    "check:pack": "node scripts/check-pack.mjs"
+    "convex:dev": "convex dev",
+    "convex:deploy": "convex deploy",
+    "convex:env": "convex env list",
+    "cdk": "cdk",
+    "cdk:synth": "cdk synth",
+    "cdk:deploy": "cdk deploy"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.840.0"

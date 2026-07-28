@@ -9,3 +9,4 @@ cdk.context.json
 
 # convex codegen (npx convex dev regenerates)
 convex/_generated/
+!.env.example
