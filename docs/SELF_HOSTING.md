@@ -110,3 +110,73 @@ secrets/vars:
 - `AWS_DEPLOY_ROLE_ARN` — OIDC-assumable deploy role
 - `JUICE_GITHUB_CLIENT_ID`
 - `AWS_REGION` (optional; default `us-east-1`)
+
+## Membership store (Convex)
+
+Accounts, identities, and invites live in Convex; secret *values* never do. The
+API server reaches it over HTTP Actions, guarded by a shared secret.
+
+```sh
+npx convex dev --once            # or: npx convex deploy   (pushes convex/)
+npx convex env set JUICE_API_SHARED_SECRET "$(openssl rand -base64 32)"
+npx convex env get JUICE_API_SHARED_SECRET   # copy to the API server
+```
+
+Then on the API server:
+
+| Variable | Value |
+|---|---|
+| `JUICE_CONVEX_URL` | `https://<deployment>.convex.site` — the **HTTP Actions** URL, not `.convex.cloud` |
+| `JUICE_CONVEX_SECRET` | the same value as `JUICE_API_SHARED_SECRET` above (≥32 chars) |
+
+Everything in `convex/membership.ts` is an `internal*` function, so it cannot be
+called by a client holding the deployment URL. `convex/http.ts` is the only
+caller and checks the shared secret first, in constant time. If
+`JUICE_API_SHARED_SECRET` is unset or short, every route refuses rather than
+defaulting open.
+
+Without both variables, `juice auth login` returns 501 — there is no way to
+resolve an account, and inventing one would put secrets somewhere unrecoverable.
+
+## Configuring the server from a file
+
+The server reads `JUICE_ENV_FILE` (default `./.env`) at startup. Unlike the CLI,
+it **does** accept `JUICE_*` keys from that file — the CLI refuses them because a
+`.env` in a repository must not be able to redirect someone's secrets, but a
+server has no repository and the operator is the one writing the file.
+
+```sh
+cat > .env <<'ENV'
+JUICE_TOKEN_SECRET=...
+JUICE_CONVEX_URL=https://<deployment>.convex.site
+JUICE_CONVEX_SECRET=...
+GITHUB_CLIENT_ID=...
+ENV
+chmod 600 .env
+```
+
+The real environment always wins over the file, so ECS task secrets and
+`docker run -e` are never overridden by a stale checkout. Startup logs which
+keys the file supplied — names only, never values — and warns if the file is
+readable by group or others.
+
+## GitHub OAuth / App setup
+
+Juice uses the **device flow**, so the CLI is a public client and there is no
+client secret. The server needs only `GITHUB_CLIENT_ID`.
+
+Either an OAuth App or a GitHub App works. For a GitHub App, note that the
+**Client ID** (`Iv23li…`) is not the **App ID** (a small integer) — the device
+flow needs the Client ID.
+
+- Tick **Enable Device Flow**. It is off by default, and without it login fails
+  with `device_flow_disabled` and no other clue.
+- The **callback URL is never used** by the device flow. It is required by the
+  registration form and then ignored, so any placeholder is fine.
+- **No permissions or scopes need to be granted.** The only GitHub call Juice
+  makes is `GET /user`, to read the numeric user id that keys the account. That
+  endpoint works with any user-access token. GitHub Apps ignore the `scope`
+  parameter entirely; the `read:user` we send is harmless.
+- The GitHub token is used once, immediately, to read that id, and then
+  discarded — Juice mints its own JWT. GitHub App token expiry is therefore
+  irrelevant.
