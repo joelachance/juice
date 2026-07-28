@@ -6,7 +6,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { juiceLogoRaw, rootHelpText, runCli } from "../src/cli/main.js";
-import { appendDotEnvValue } from "../src/local/dotenv.js";
+import { setDotEnvValue } from "../src/local/dotenv.js";
 import { fingerprintFile, recordEnvFingerprint } from "../src/local/state.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -77,7 +77,7 @@ test("juice init scaffolds gitignore and .env once", async () => {
 
 test("juice get prints only the value; missing key stays off stdout", async () => {
   const dir = projectDir("juice-get-");
-  appendDotEnvValue(join(dir, ".env"), "OPENAI_API_KEY", "sk-test", "development");
+  setDotEnvValue(join(dir, ".env"), "OPENAI_API_KEY", "sk-test", "development");
 
   const ok = await runCaptured(["get", "OPENAI_API_KEY", "--local"], { cwd: dir });
   assert.equal(ok.code, 0);
@@ -92,8 +92,8 @@ test("juice get prints only the value; missing key stays off stdout", async () =
 
 test("juice list prints sorted keys and never values", async () => {
   const dir = projectDir("juice-list-");
-  appendDotEnvValue(join(dir, ".env"), "ZEBRA", "z-secret", "development");
-  appendDotEnvValue(join(dir, ".env"), "ALPHA", "a-secret", "development");
+  setDotEnvValue(join(dir, ".env"), "ZEBRA", "z-secret", "development");
+  setDotEnvValue(join(dir, ".env"), "ALPHA", "a-secret", "development");
 
   const result = await runCaptured(["list", "--local"], { cwd: dir });
   assert.equal(result.code, 0);
@@ -137,9 +137,9 @@ test("juice unset removes key and marker, leaves neighbors, re-fingerprints", as
 
 test("juice run injects secrets without overriding env and propagates exit code", async () => {
   const dir = projectDir("juice-run-");
-  appendDotEnvValue(join(dir, ".env"), "FROM_FILE", "file-value", "development");
-  appendDotEnvValue(join(dir, ".env"), "PRESET", "file-should-lose", "development");
-  appendDotEnvValue(join(dir, ".env"), "JUICE_TOKEN", "should-skip", "development");
+  setDotEnvValue(join(dir, ".env"), "FROM_FILE", "file-value", "development");
+  setDotEnvValue(join(dir, ".env"), "PRESET", "file-should-lose", "development");
+  setDotEnvValue(join(dir, ".env"), "JUICE_TOKEN", "should-skip", "development");
 
   const inject = await runCaptured(
     ["run", "--local", "--", "node", "-e", "process.stdout.write(process.env.FROM_FILE + '|' + (process.env.PRESET || '') + '|' + (process.env.JUICE_TOKEN || ''))"],

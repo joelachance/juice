@@ -11,7 +11,7 @@ import { getToken, setToken } from "../auth/token-store.js";
 import { resolveProject, resolveJuiceEnv, isLocalMode } from "../config/project.js";
 import { apiBase, requestJson } from "../http/client.js";
 import { loadJuiceEnv } from "../local/bootstrap-env.js";
-import { appendDotEnvValue, readDotEnv, removeDotEnvKey } from "../local/dotenv.js";
+import { setDotEnvValue, readDotEnv, removeDotEnvKey } from "../local/dotenv.js";
 import { ensureJuiceGitignore } from "../local/gitignore.js";
 import { hasEnvDrift, recordEnvFingerprint } from "../local/state.js";
 
@@ -217,7 +217,7 @@ async function setSecret(key: string, args: Args): Promise<void> {
   }
 
   const envFile = join(root, ".env");
-  appendDotEnvValue(envFile, key, value, envName);
+  setDotEnvValue(envFile, key, value, envName);
   recordEnvFingerprint(root, envFile);
   console.log(`Appended ${key} to .env.`);
 }

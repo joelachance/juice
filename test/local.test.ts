@@ -3,20 +3,34 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { appendDotEnvValue, readDotEnv, removeDotEnvKey } from "../src/local/dotenv.js";
+import { setDotEnvValue, readDotEnv, removeDotEnvKey } from "../src/local/dotenv.js";
 import { JUICE_GITIGNORE_MARKER, ensureJuiceGitignore } from "../src/local/gitignore.js";
 import { hasEnvDrift, recordEnvFingerprint } from "../src/local/state.js";
 
-test("appendDotEnvValue appends and readDotEnv uses the last value", () => {
+test("setDotEnvValue replaces in place and leaves no copy of the old value", () => {
   const dir = mkdtempSync(join(tmpdir(), "juice-local-"));
   const envFile = join(dir, ".env");
 
-  appendDotEnvValue(envFile, "OPENAI_API_KEY", "first", "development");
-  appendDotEnvValue(envFile, "OPENAI_API_KEY", "second value", "development");
+  setDotEnvValue(envFile, "OPENAI_API_KEY", "first", "development");
+  setDotEnvValue(envFile, "OPENAI_API_KEY", "second value", "development");
 
   const contents = readFileSync(envFile, "utf8");
   assert.match(contents, /# juice: added .* env=development/);
   assert.equal(readDotEnv(envFile).OPENAI_API_KEY, "second value");
+  // The point of the upsert: rotating a leaked key must not leave it in the file.
+  assert.doesNotMatch(contents, /first/);
+  assert.equal(contents.match(/^OPENAI_API_KEY=/gm)?.length, 1);
+});
+
+test("setDotEnvValue keeps position and neighbours when replacing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "juice-upsert-"));
+  const envFile = join(dir, ".env");
+  writeFileSync(envFile, ["FIRST=1", "TARGET=old", "LAST=3", ""].join("\n"));
+
+  setDotEnvValue(envFile, "TARGET", "new", "development");
+
+  const lines = readFileSync(envFile, "utf8").split("\n").filter((line) => line && !line.startsWith("#"));
+  assert.deepEqual(lines, ["FIRST=1", "TARGET=new", "LAST=3"]);
 });
 
 test("state fingerprint detects out-of-band .env edits", () => {
