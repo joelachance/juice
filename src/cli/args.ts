@@ -12,7 +12,7 @@ import type { ExportFormat } from "../local/dotenv.js";
 export const KEY_COMMANDS = new Set(["set", "get", "unset"]);
 
 /** Flags that consume the next argv entry, so positionals can be counted. */
-const VALUE_FLAGS = new Set(["--scope", "--project", "--env", "--to", "--format", "--ttl"]);
+const VALUE_FLAGS = new Set(["--scope", "--env", "--to", "--format", "--ttl"]);
 
 export type Args = {
   command?: string;
@@ -55,8 +55,7 @@ export function parseArgs(flagArgv: string[]): Args {
     subcommand: positionals[1],
     key: command && KEY_COMMANDS.has(command) ? positionals[1] : undefined,
     positionals,
-    // --project is the old spelling of --scope; a scope *is* the project string.
-    scopes: [...flagValues(flagArgv, "--scope"), ...flagValues(flagArgv, "--project")],
+    scopes: flagValues(flagArgv, "--scope"),
     env: flagValue(flagArgv, "--env"),
     to: flagValue(flagArgv, "--to"),
     format,
