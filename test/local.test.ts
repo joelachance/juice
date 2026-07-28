@@ -62,6 +62,19 @@ test("writers match indented key lines that the reader can see", () => {
   assert.equal(readDotEnv(envFile).OTHER, undefined);
 });
 
+test("readDotEnv has no prototype chain", () => {
+  const dir = mkdtempSync(join(tmpdir(), "juice-proto-"));
+  const envFile = join(dir, ".env");
+  writeFileSync(envFile, "REAL=1\n");
+  const values = readDotEnv(envFile);
+
+  // `juice get constructor` printed "[Function: Object]" and exited 0.
+  assert.equal(values.constructor, undefined);
+  assert.equal(values.toString, undefined);
+  assert.equal("valueOf" in values, false);
+  assert.equal(values.REAL, "1");
+});
+
 test("removeDotEnvKey removes key and juice marker while leaving neighbors", () => {
   const dir = mkdtempSync(join(tmpdir(), "juice-unset-"));
   const envFile = join(dir, ".env");

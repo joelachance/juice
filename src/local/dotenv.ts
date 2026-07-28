@@ -13,8 +13,11 @@ export function dotEnvLineKey(rawLine: string): string | undefined {
 }
 
 export function readDotEnv(filePath: string): Record<string, string> {
-  if (!existsSync(filePath)) return {};
-  const values: Record<string, string> = {};
+  // Null-prototype: a plain object makes `values["constructor"]` and
+  // `"toString" in values` truthy, so `juice get constructor` printed
+  // "[Function: Object]" with exit 0 and `unset toString` claimed success.
+  const values: Record<string, string> = Object.create(null);
+  if (!existsSync(filePath)) return values;
   for (const rawLine of readFileSync(filePath, "utf8").split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
