@@ -1,0 +1,110 @@
+.nav {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 18px 22px;
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--carbon);
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.icon:hover {
+  color: var(--f1-red);
+}
+
+.icon svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+
+/* Hamburger: three rules that collapse into an X when open. */
+.burger {
+  position: relative;
+  display: block;
+  width: 17px;
+  height: 12px;
+}
+
+.burger span {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 1.5px;
+  background: currentColor;
+  transition:
+    transform 0.2s ease,
+    opacity 0.15s ease;
+}
+
+.burger span:nth-child(1) {
+  top: 0;
+}
+.burger span:nth-child(2) {
+  top: 5.25px;
+}
+.burger span:nth-child(3) {
+  top: 10.5px;
+}
+
+.burgerOpen span:nth-child(1) {
+  transform: translateY(5.25px) rotate(45deg);
+}
+.burgerOpen span:nth-child(2) {
+  opacity: 0;
+}
+.burgerOpen span:nth-child(3) {
+  transform: translateY(-5.25px) rotate(-45deg);
+}
+
+.menuWrap {
+  position: relative;
+}
+
+.dropdown {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  min-width: 168px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  padding: 4px;
+}
+
+.item {
+  padding: 9px 12px;
+  font-family: var(--font-berkeley-mono), monospace;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--carbon);
+  text-decoration: none;
+  white-space: nowrap;
+  border-left: 2px solid transparent;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.item:hover {
+  color: var(--f1-red);
+  border-left-color: var(--f1-red);
+}
