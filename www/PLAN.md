@@ -13,7 +13,7 @@ Secondary: **GitHub** — https://github.com/satoricorp/juice
 
 ## Tech
 
-- Multi-page static HTML: `index.html`, `get-started.html`, shared `styles.css` + `site.js`
+- Static HTML: `index.html`, with `styles.css` + `site.js`
 - Blob display font in `fonts/` (local copy)
 - Echo logo (text-ui pattern) with psychedelic swirl fills on echo layers
 - No analytics / trackers
@@ -21,7 +21,9 @@ Secondary: **GitHub** — https://github.com/satoricorp/juice
 ## Pages
 
 1. **Home** (`index.html`) — hero + 3 features + FAQ only
-2. **Get Started** (`get-started.html`) — install, examples, commands, agents
+
+Install instructions live in the README rather than a second page, so there is
+one place to keep current when the CLI changes.
 
 ## Brand
 
