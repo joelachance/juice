@@ -170,3 +170,27 @@ function formatDotEnvValue(value: string): string {
   if (/^[A-Za-z0-9_./:@-]+$/.test(value)) return value;
   return JSON.stringify(value);
 }
+
+export type ExportFormat = "dotenv" | "sh";
+
+/**
+ * POSIX single-quoting: end the quote, emit an escaped `'`, reopen.
+ *
+ * This is the whole reason `--format sh` is a separate format. The dotenv
+ * writer double-quotes via `JSON.stringify`, which is correct for a dotenv
+ * *parser* and catastrophic for `source`: inside double quotes the shell still
+ * expands `$(…)`, backticks, and `$VAR`, so a secret whose value contained a
+ * command substitution would execute the moment the consumer sourced the file.
+ * Single quotes expand nothing.
+ */
+export function shQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function serializeSecrets(values: Record<string, string>, format: ExportFormat): string {
+  const keys = Object.keys(values).sort();
+  const lines = keys.map((key) => format === "sh"
+    ? `export ${key}=${shQuote(values[key])}`
+    : `${key}=${formatDotEnvValue(values[key])}`);
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
+}

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { setDotEnvValue, readDotEnv, removeDotEnvKey } from "../src/local/dotenv.js";
+import { readDotEnv, removeDotEnvKey, serializeSecrets, setDotEnvValue, shQuote } from "../src/local/dotenv.js";
 import { JUICE_GITIGNORE_MARKER, ensureJuiceGitignore } from "../src/local/gitignore.js";
 import { hasEnvDrift, recordEnvFingerprint } from "../src/local/state.js";
 
@@ -145,4 +145,20 @@ test("ensureJuiceGitignore appends once and is idempotent", () => {
   assert.equal(second.added, false);
   assert.equal(readFileSync(join(dir, ".gitignore"), "utf8"), once);
   assert.equal(existsSync(join(dir, ".gitignore")), true);
+});
+
+test("shQuote neutralises shell expansion so a sourced export cannot execute", () => {
+  assert.equal(shQuote("plain"), "'plain'");
+  assert.equal(shQuote("$(id)"), "'$(id)'");
+  assert.equal(shQuote("it's"), "'it'\\''s'");
+
+  // The failure this guards: a double-quoted value runs the substitution on `source`.
+  const serialized = serializeSecrets({ TOKEN: "$(touch /tmp/pwned)`id`" }, "sh");
+  assert.equal(serialized, "export TOKEN='$(touch /tmp/pwned)`id`'\n");
+  assert.doesNotMatch(serialized, /"/);
+});
+
+test("serializeSecrets sorts keys and emits dotenv without the export prefix", () => {
+  assert.equal(serializeSecrets({ B: "2", A: "1" }, "dotenv"), "A=1\nB=2\n");
+  assert.equal(serializeSecrets({}, "sh"), "");
 });
