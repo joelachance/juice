@@ -85,6 +85,22 @@ test("readDotEnv round-trips a literal backslash-n without turning it into a new
   assert.equal(readDotEnv(envFile).TRICKY, value);
 });
 
+test("every escape the writer emits survives the reader", () => {
+  const dir = mkdtempSync(join(tmpdir(), "juice-ctrl-"));
+  const envFile = join(dir, ".env");
+  // The writer escapes with JSON.stringify; a hand-rolled unescape only knew
+  // \n \r \t, so control characters came back as literal "u0001" and \b as "b".
+  const values = [
+    "a\u0001b", "a\u0007b", "a\bb", "a\fb", "a\u000bb", "a\u0000b",
+    "a\ud800b", "line\nbreak", "tab\there", 'quote"dq', "sq'q", "back\\slash",
+    String.raw`a\nb`, "", " lead", "trail ", "#hash", "emoji😀"
+  ];
+  for (const value of values) {
+    setDotEnvValue(envFile, "K", value, "development");
+    assert.equal(readDotEnv(envFile).K, value, `round-trip failed for ${JSON.stringify(value)}`);
+  }
+});
+
 test("removeDotEnvKey removes key and juice marker while leaving neighbors", () => {
   const dir = mkdtempSync(join(tmpdir(), "juice-unset-"));
   const envFile = join(dir, ".env");

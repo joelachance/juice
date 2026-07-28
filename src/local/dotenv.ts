@@ -120,11 +120,31 @@ export function removeDotEnvKey(filePath: string, key: string): boolean {
 function parseDotEnvValue(value: string): string {
   const trimmed = value.trim();
   if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
-    return lenientUnescape(trimmed.slice(1, -1));
+    return unescapeDoubleQuotedBody(trimmed.slice(1, -1));
   }
   if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1);
   const hashIndex = trimmed.indexOf(" #");
   return hashIndex >= 0 ? trimmed.slice(0, hashIndex).trimEnd() : trimmed;
+}
+
+/**
+ * The writer escapes with `JSON.stringify`, so the reader parses with
+ * `JSON.parse` — anything else is asymmetric and silently corrupts values.
+ * Hand-rolling the unescape missed every form `JSON.stringify` emits beyond
+ * `\n`/`\r`/`\t`: a control character came back as the literal `u0001`, and
+ * `\b` as `b`.
+ *
+ * A hand-written `.env` need not be valid JSON, so an unparsable value falls
+ * back to the lenient reader rather than failing the whole file.
+ */
+function unescapeDoubleQuotedBody(body: string): string {
+  try {
+    const parsed = JSON.parse(`"${body}"`) as unknown;
+    if (typeof parsed === "string") return parsed;
+  } catch {
+    // Not JSON-escaped; fall through.
+  }
+  return lenientUnescape(body);
 }
 
 /**
