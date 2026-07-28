@@ -119,12 +119,31 @@ export function removeDotEnvKey(filePath: string, key: string): boolean {
 
 function parseDotEnvValue(value: string): string {
   const trimmed = value.trim();
-  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    return trimmed.slice(1, -1).replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
+    return lenientUnescape(trimmed.slice(1, -1));
   }
   if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1);
   const hashIndex = trimmed.indexOf(" #");
   return hashIndex >= 0 ? trimmed.slice(0, hashIndex).trimEnd() : trimmed;
+}
+
+/**
+ * Single pass, because chained `.replace()` calls unescape their own output:
+ * `"a\\nb"` (a literal backslash then `n`) had its `\\` collapsed to `\`, and
+ * the resulting `\n` was then read as a newline by the next replace.
+ */
+function lenientUnescape(body: string): string {
+  let out = "";
+  for (let index = 0; index < body.length; index++) {
+    if (body[index] !== "\\") {
+      out += body[index];
+      continue;
+    }
+    const next = body[++index];
+    if (next === undefined) return `${out}\\`;
+    out += next === "n" ? "\n" : next === "r" ? "\r" : next === "t" ? "\t" : next;
+  }
+  return out;
 }
 
 function formatDotEnvValue(value: string): string {

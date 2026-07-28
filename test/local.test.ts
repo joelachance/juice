@@ -75,6 +75,16 @@ test("readDotEnv has no prototype chain", () => {
   assert.equal(values.REAL, "1");
 });
 
+test("readDotEnv round-trips a literal backslash-n without turning it into a newline", () => {
+  const dir = mkdtempSync(join(tmpdir(), "juice-escape-"));
+  const envFile = join(dir, ".env");
+  const value = String.raw`a\nb"c\\d`;
+
+  setDotEnvValue(envFile, "TRICKY", value, "development");
+
+  assert.equal(readDotEnv(envFile).TRICKY, value);
+});
+
 test("removeDotEnvKey removes key and juice marker while leaving neighbors", () => {
   const dir = mkdtempSync(join(tmpdir(), "juice-unset-"));
   const envFile = join(dir, ".env");
