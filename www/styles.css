@@ -1,0 +1,655 @@
+@font-face {
+  font-family: "Blob";
+  src:
+    url("./fonts/Blob-Regular.otf") format("opentype"),
+    url("./fonts/Blob-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Berkeley Mono";
+  src: url("./fonts/BerkeleyMonoVariable.otf") format("opentype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Vercel / Geist-inspired neutrals */
+:root {
+  --bg: #ffffff;
+  --bg-deep: #fafafa;
+  --fg: #171717;
+  --muted: #666666;
+  --border: #eaeaea;
+  --border-hover: #999999;
+  --accent: #171717;
+  --accent-hover: #000000;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(0, 0, 0, 0.04);
+  --code-bg: #fafafa;
+  --code-fg: #171717;
+  --focus: #0070f3;
+  /* Oil-paint swirl palette — deep saturated bands from the painting */
+  --echo-1: #c9a06e;
+  --echo-2: #d94320;
+  --echo-3: #8a1219;
+  --echo-4: #152a45;
+  --echo-stroke: #171717;
+  --swirl-ochre: #c9a06e;
+  --swirl-amber: #d94320;
+  --swirl-ember: #eb8039;
+  --swirl-red: #8a1219;
+  --swirl-wine: #431620;
+  --swirl-navy: #152a45;
+  --swirl-angle: 0deg;
+  --max: 40rem;
+  --wide: 52rem;
+  --font: "Berkeley Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --mono: "Berkeley Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --display: "Blob", "Blob Regular", sans-serif;
+  --radius: 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --bg-deep: #0a0a0a;
+    --fg: #ededed;
+    --muted: #888888;
+    --border: #333333;
+    --border-hover: #666666;
+    --accent: #ededed;
+    --accent-hover: #ffffff;
+    --accent-fg: #000000;
+    --accent-soft: rgba(255, 255, 255, 0.06);
+    --code-bg: #111111;
+    --code-fg: #ededed;
+    --focus: #0070f3;
+    --echo-1: #c9a06e;
+    --echo-2: #d94320;
+    --echo-3: #8a1219;
+    --echo-4: #152a45;
+    --echo-stroke: #ffffff;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font);
+  font-size: 1rem;
+  line-height: 1.55;
+  color: var(--fg);
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -20%, var(--accent-soft), transparent 55%),
+    linear-gradient(180deg, var(--bg-deep) 0%, var(--bg) 32%, var(--bg) 100%);
+}
+
+a {
+  color: var(--fg);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+}
+
+a:hover {
+  color: var(--muted);
+}
+
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: var(--code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  border: none;
+}
+
+.wrap {
+  width: min(100% - 2rem, var(--wide));
+  margin-inline: auto;
+}
+
+.narrow {
+  width: min(100%, var(--max));
+}
+
+/* —— Header —— */
+header.site {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Animate conic angle for liquid paint swirl (not a sliding stripe) */
+@property --swirl-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.brand {
+  font-family: var(--display);
+  font-size: 1.55rem;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  /* Layered conic + soft radial = swirling paint, not a stripe slide.
+     Tighter color stops + modest size so multiple bands read in the small wordmark. */
+  background-image:
+    radial-gradient(
+      ellipse 55% 70% at 28% 35%,
+      color-mix(in srgb, var(--swirl-ember) 65%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 50% 65% at 78% 70%,
+      color-mix(in srgb, var(--swirl-navy) 60%, transparent),
+      transparent 68%
+    ),
+    conic-gradient(
+      from var(--swirl-angle) at 38% 55%,
+      var(--swirl-ochre) 0deg,
+      var(--swirl-ember) 28deg,
+      var(--swirl-amber) 52deg,
+      var(--swirl-red) 88deg,
+      var(--swirl-wine) 118deg,
+      var(--swirl-navy) 155deg,
+      var(--swirl-red) 195deg,
+      var(--swirl-amber) 235deg,
+      var(--swirl-ember) 275deg,
+      var(--swirl-ochre) 310deg,
+      var(--swirl-navy) 340deg,
+      var(--swirl-ochre) 360deg
+    );
+  background-size: 160% 160%, 150% 150%, 140% 140%;
+  background-position: 20% 30%, 70% 60%, 50% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation:
+    brand-swirl-spin 11s linear infinite,
+    brand-swirl-drift 7s ease-in-out infinite alternate;
+}
+
+.brand:hover {
+  animation-duration: 5.5s, 3.5s;
+}
+
+@keyframes brand-swirl-spin {
+  to {
+    --swirl-angle: 360deg;
+  }
+}
+
+@keyframes brand-swirl-drift {
+  0% {
+    background-position: 10% 20%, 85% 50%, 40% 55%;
+  }
+  100% {
+    background-position: 60% 75%, 30% 35%, 60% 40%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand {
+    animation: none;
+    --swirl-angle: 48deg;
+    background-position: 35% 40%, 65% 55%, 50% 50%;
+  }
+}
+
+nav.primary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  font-size: 0.875rem;
+}
+
+nav.primary a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+nav.primary a:hover,
+nav.primary a[aria-current="page"] {
+  color: var(--fg);
+}
+
+@media (max-width: 640px) {
+  header.site {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  nav.primary {
+    width: 100%;
+    gap: 0.5rem 1rem;
+  }
+}
+
+/* —— Echo logo (solid primary layers + depth) —— */
+.echo {
+  /* Resting offset so solid echo fills stay visible (not stacked under front) */
+  --echo-x: 0.5;
+  --echo-y: 0.42;
+  position: relative;
+  display: inline-block;
+  margin: 0 0 1.5rem;
+  user-select: none;
+  line-height: 0.85;
+  font-family: var(--display);
+  font-size: clamp(4.5rem, 18vw, 9.5rem);
+  letter-spacing: 0.01em;
+  cursor: default;
+}
+
+.echo-layer,
+.echo-front {
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+}
+
+.echo-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  color: var(--echo-fill, var(--echo-1));
+  -webkit-text-fill-color: var(--echo-fill, var(--echo-1));
+  -webkit-text-stroke: 1.5px var(--echo-stroke);
+  paint-order: stroke fill;
+  transition: transform 300ms ease-out;
+  will-change: transform;
+}
+
+.echo-layer--farthest {
+  --echo-fill: var(--echo-1);
+  transform: translate(calc(var(--echo-x) * 40px), calc(var(--echo-y) * 40px));
+  opacity: 0.72;
+}
+
+.echo-layer--far {
+  --echo-fill: var(--echo-2);
+  transform: translate(calc(var(--echo-x) * 28px), calc(var(--echo-y) * 28px));
+  opacity: 0.82;
+}
+
+.echo-layer--mid {
+  --echo-fill: var(--echo-3);
+  transform: translate(calc(var(--echo-x) * 16px), calc(var(--echo-y) * 16px));
+  opacity: 0.9;
+}
+
+.echo-layer--near {
+  --echo-fill: var(--echo-4);
+  transform: translate(calc(var(--echo-x) * 8px), calc(var(--echo-y) * 8px));
+  opacity: 0.96;
+}
+
+.echo-front {
+  position: relative;
+  color: var(--fg);
+  -webkit-text-fill-color: var(--fg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .echo-layer {
+    transition: none;
+  }
+}
+
+/* —— Hero —— */
+.hero {
+  padding: 3.25rem 0 2.75rem;
+}
+
+.hero h1 {
+  margin: 0 0 0.75rem;
+  font-size: clamp(1.5rem, 4vw, 2rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.lede {
+  margin: 0 0 1.75rem;
+  max-width: 34rem;
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem 1.15rem;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+  color: var(--accent-fg);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.btn-ghost:hover {
+  border-color: var(--border-hover);
+  color: var(--fg);
+  background: var(--accent-soft);
+}
+
+.cmd-block {
+  display: flex;
+  align-items: stretch;
+  max-width: 100%;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.cmd-block code {
+  flex: 1;
+  padding: 0.7rem 0.9rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--code-fg);
+  overflow-x: auto;
+  white-space: nowrap;
+  background: none;
+  border: none;
+}
+
+.cmd-block button {
+  flex-shrink: 0;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0 0.85rem;
+  cursor: pointer;
+}
+
+.cmd-block button:hover {
+  color: var(--fg);
+}
+
+.cmd-block button[data-copied="true"] {
+  color: var(--fg);
+}
+
+/* —— Sections —— */
+section {
+  padding: 2.5rem 0;
+  border-top: 1px solid var(--border);
+}
+
+section h2 {
+  margin: 0 0 1.25rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+section p {
+  margin: 0 0 0.85rem;
+  color: var(--muted);
+  max-width: 40rem;
+}
+
+.features {
+  display: grid;
+  gap: 1.5rem;
+}
+
+@media (min-width: 720px) {
+  .features {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.75rem;
+  }
+}
+
+.feature h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.feature p {
+  margin: 0;
+  font-size: 0.925rem;
+}
+
+.faq details {
+  border-top: 1px solid var(--border);
+  padding: 0.85rem 0;
+}
+
+.faq details:last-child {
+  border-bottom: 1px solid var(--border);
+}
+
+.faq summary {
+  cursor: pointer;
+  font-weight: 500;
+  list-style: none;
+}
+
+.faq summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq summary::before {
+  content: "+";
+  display: inline-block;
+  width: 1.1em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.faq details[open] summary::before {
+  content: "−";
+}
+
+.faq details p {
+  margin: 0.55rem 0 0.15rem 1.1em;
+  font-size: 0.925rem;
+}
+
+.faq a {
+  word-break: break-word;
+}
+
+/* —— Docs / get started —— */
+.page-hero {
+  padding: 2.5rem 0 1.5rem;
+}
+
+.page-hero h1 {
+  margin: 0 0 0.5rem;
+  font-size: clamp(1.4rem, 3.5vw, 1.75rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.page-hero .lede {
+  margin-bottom: 0;
+}
+
+.steps {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.step h3 {
+  margin: 0 0 0.45rem;
+  font-size: 0.95rem;
+}
+
+.step p {
+  margin: 0 0 0.75rem;
+}
+
+pre.sample {
+  margin: 0.75rem 0 0;
+  padding: 1rem 1.1rem;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--code-fg);
+}
+
+table.commands {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+table.commands th,
+table.commands td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.65rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+table.commands th {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+table.commands td:first-child {
+  white-space: nowrap;
+  width: 40%;
+}
+
+table.commands code {
+  background: none;
+  padding: 0;
+  border: none;
+  font-size: 0.88rem;
+}
+
+@media (max-width: 640px) {
+  table.commands,
+  table.commands thead,
+  table.commands tbody,
+  table.commands th,
+  table.commands td,
+  table.commands tr {
+    display: block;
+  }
+
+  table.commands thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  table.commands tr {
+    padding: 0.85rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  table.commands td {
+    border: none;
+    padding: 0.15rem 0;
+    width: auto;
+    white-space: normal;
+  }
+
+  table.commands td:last-child {
+    color: var(--muted);
+  }
+}
+
+/* —— Footer —— */
+footer.site {
+  margin-top: 1rem;
+  padding: 1.75rem 0 2.5rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+footer.site nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.1rem;
+  margin-bottom: 0.75rem;
+}
+
+footer.site a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+footer.site a:hover {
+  color: var(--fg);
+}

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Juice — simple secrets management. Manage every secret locally from the Juice CLI. Use the Juice SDK to pull secrets in production." />
+  <title>Juice — Simple Secrets Management</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="site">
+      <a class="brand" href="index.html">Juice</a>
+      <nav class="primary" aria-label="Primary">
+        <a href="index.html" aria-current="page">Home</a>
+        <a href="get-started.html">Get Started</a>
+        <a href="index.html#faq">FAQ</a>
+        <a href="https://github.com/satoricorp/juice">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="pitch">
+        <div
+          class="echo"
+          data-echo
+          role="img"
+          aria-label="Juice"
+        >
+          <p class="echo-layer echo-layer--farthest" aria-hidden="true">Juice</p>
+          <p class="echo-layer echo-layer--far" aria-hidden="true">Juice</p>
+          <p class="echo-layer echo-layer--mid" aria-hidden="true">Juice</p>
+          <p class="echo-layer echo-layer--near" aria-hidden="true">Juice</p>
+          <p class="echo-front" aria-hidden="true">Juice</p>
+        </div>
+
+        <h1 id="pitch">Simple Secrets Management.</h1>
+        <p class="lede">
+          Manage every secret locally from the Juice CLI. Use the Juice SDK to pull secrets in production.
+        </p>
+
+        <div class="cta-row">
+          <a class="btn btn-primary" href="get-started.html">Get Started</a>
+          <a class="btn btn-ghost" href="https://github.com/satoricorp/juice">GitHub</a>
+        </div>
+
+        <div class="cmd-block" role="group" aria-label="Install command">
+          <code id="install-cmd">npm i @juice/sdk &amp;&amp; npx juice init</code>
+          <button type="button" data-copy="npm i @juice/sdk && npx juice init" aria-label="Copy install command">Copy</button>
+        </div>
+      </section>
+
+      <section id="features" aria-labelledby="features-heading">
+        <h2 id="features-heading">Features</h2>
+        <div class="features">
+          <article class="feature">
+            <h3>Single Source of Truth</h3>
+            <p>
+              Use Juice to set secrets in your .env, and the same CLI to set secrets in your preview and production environments.
+            </p>
+          </article>
+          <article class="feature">
+            <h3>Built for Agents</h3>
+            <p>
+              Juice CLI is built to be used by agents. As long as your machine is approved by Juice, it will allow get/set secrets based on machine permissions.
+            </p>
+          </article>
+          <article class="feature">
+            <h3>Manage Production Secrets Locally</h3>
+            <p>
+              Easily create, read, update, and delete secrets in any environment.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="faq" class="faq" aria-labelledby="faq-heading">
+        <h2 id="faq-heading">FAQ</h2>
+
+        <details>
+          <summary>Is Juice open source?</summary>
+          <p>
+            Yes. Host Juice in your AWS for free. You can contribute and star Juice at Github:
+            <a href="https://github.com/satoricorp/juice">https://github.com/satoricorp/juice</a>
+          </p>
+        </details>
+
+        <details>
+          <summary>Can anyone ever see a secret?</summary>
+          <p>
+            The only time a secret can be seen is if you print it to stdout from the SDK. The CLI will never show a secret, and any secrets you store can never be viewed by another org.
+          </p>
+        </details>
+
+        <details>
+          <summary>How are secrets scoped?</summary>
+          <p>
+            Every secret is scoped by org and the user who set the secret. Orgs can use secrets set by its users.
+          </p>
+        </details>
+
+        <details>
+          <summary>Is Juice free?</summary>
+          <p>
+            It's 100% pulp free. It's also 100% free. Go to github and use it today!
+            <a href="https://github.com/satoricorp/juice">https://github.com/satoricorp/juice</a>
+          </p>
+        </details>
+      </section>
+    </main>
+
+    <footer class="site">
+      <nav aria-label="Footer">
+        <a href="get-started.html">Get Started</a>
+        <a href="https://github.com/satoricorp/juice">GitHub</a>
+        <a href="https://github.com/satoricorp/juice/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/satoricorp/juice/blob/main/docs/SELF_HOSTING.md">Self-host</a>
+      </nav>
+      <p>Apache-2.0 SDK · AGPL-3.0 server</p>
+    </footer>
+  </div>
+
+  <script src="site.js" defer></script>
+</body>
+</html>
