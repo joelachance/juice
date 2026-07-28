@@ -1,0 +1,33 @@
+:root {
+  --surface: #e9e8e3;
+  --carbon: #17191f;
+  --f1-red: #e10600;
+  --muted: rgba(23, 25, 31, 0.62);
+  --rule: rgba(23, 25, 31, 0.16);
+}
+
+html {
+  box-sizing: border-box;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: inherit;
+}
+
+html,
+body {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--surface);
+  color: var(--carbon);
+  font-family: var(--font-berkeley-mono), monospace;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
