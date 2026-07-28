@@ -77,6 +77,12 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
   if (args.command === "scopes") {
     return listScopes(args);
   }
+  if (args.command === "members") {
+    return args.subcommand === "invite" ? await createInvite(args) : await listMembers(args);
+  }
+  if (args.command === "join") {
+    return await joinAccount(args);
+  }
   if (args.command === "set" && args.key) {
     if (args.positionals.length > 2) {
       console.error(valueAsArgumentError(args.key));
@@ -254,6 +260,100 @@ function listScopes(args: Args): number {
   }
   for (const scope of known) console.log(scope);
   return 0;
+}
+
+// ── membership ───────────────────────────────────────────────────────────────
+
+async function listMembers(args: Args): Promise<number> {
+  const env = envWithOverrides(args);
+  const token = getToken(env);
+  if (!token) {
+    console.error("Run `juice auth login` before listing members.");
+    return 1;
+  }
+  try {
+    const result = await requestJson<{
+      accountName: string;
+      members: Array<{ provider: string; subject: string; login?: string; joinedAt: number }>;
+    }>(`${apiBase(env)}/members`, { method: "GET", token });
+    console.error(`${result.accountName} — ${result.members.length} member${result.members.length === 1 ? "" : "s"}`);
+    for (const member of result.members) {
+      console.log(member.login ?? `${member.provider}:${member.subject}`);
+    }
+    return 0;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+async function createInvite(args: Args): Promise<number> {
+  const env = envWithOverrides(args);
+  const token = getToken(env);
+  if (!token) {
+    console.error("Run `juice auth login` before creating an invite.");
+    return 1;
+  }
+  try {
+    const created = await requestJson<{ code: string; expiresAt: number; accountName: string }>(
+      `${apiBase(env)}/invites`,
+      { method: "POST", token, body: JSON.stringify({ ttlSeconds: args.ttlSeconds }) }
+    );
+    // The blast radius, stated plainly: there is no per-scope membership, so
+    // this grants everything the account holds, including secrets set earlier.
+    console.error(`Invite for ${created.accountName}.`);
+    console.error("It grants read/write to EVERY secret in the account, in every scope.");
+    console.error(`Single use, expires ${new Date(created.expiresAt).toISOString()}.`);
+    console.error("");
+    console.log(created.code);
+    console.error("");
+    console.error("Share it over a channel you trust. It is not shown again.");
+    return 0;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+async function joinAccount(args: Args): Promise<number> {
+  const code = args.positionals[1];
+  if (!code) {
+    console.error("Usage: juice join <code>");
+    return 1;
+  }
+  const env = envWithOverrides(args);
+  const token = getToken(env);
+  if (!token) {
+    console.error("Run `juice auth login` before joining an account.");
+    return 1;
+  }
+  if (!(await confirm("Join this account? You will be able to read every secret it holds.", args.yes))) {
+    console.error("Cancelled.");
+    return 1;
+  }
+  try {
+    const result = await requestJson<{ account: { id: string; name: string }; token: string }>(
+      `${apiBase(env)}/invites/redeem`,
+      { method: "POST", token, body: JSON.stringify({ code }) }
+    );
+    // The old token still names the previous account; replace it.
+    setToken(result.token);
+    console.log(`Joined ${result.account.name}.`);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "invite_invalid") {
+      console.error("That invite is not valid — it may be expired, already used, or mistyped.");
+    } else if (message === "already_member") {
+      console.error("You are already a member of that account.");
+    } else if (message === "already_in_account") {
+      console.error("You already belong to an account that holds secrets.");
+      console.error("One account per identity for now, so this invite cannot be redeemed.");
+    } else {
+      console.error(message);
+    }
+    return 1;
+  }
 }
 
 // ── secrets ──────────────────────────────────────────────────────────────────
@@ -597,6 +697,11 @@ Usage:
 Setup:
   auth login Authenticate with Juice
   scopes     List scopes used on this machine
+
+Account:
+  members        List who can read this account's secrets
+  members invite Create a single-use invite code
+  join CODE      Join an account with an invite code
 
 Secrets:
   set KEY    Add or replace a secret (prompt, or --stdin)
