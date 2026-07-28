@@ -413,6 +413,66 @@ test("list returns only the caller's keys (cross-user isolation)", async () => {
   }
 });
 
+test("?values=1 returns the caller's secrets in one request and audits each key", async () => {
+  const backend = memoryBackend([
+    { ref: { userId: "1", project: "demo", env: "dev", key: "ALPHA" }, value: "a" },
+    { ref: { userId: "1", project: "demo", env: "dev", key: "BETA" }, value: "b" },
+    { ref: { userId: "2", project: "demo", env: "dev", key: "OTHER" }, value: "leak-me" }
+  ]);
+  const logs: string[] = [];
+  const previousLog = console.log;
+  console.log = (message?: unknown) => { logs.push(String(message)); };
+  const server = createJuiceServer({
+    backend,
+    tokenSecret: TEST_SECRET,
+    revocationStore: new MemoryTokenRevocationStore()
+  });
+  const port = await listen(server);
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/projects/demo/envs/dev/secrets?values=1`, {
+      headers: { authorization: `Bearer ${signToken({ sub: "github:1" }, TEST_SECRET)}` }
+    });
+    const body = await response.json() as { keys?: string[]; secrets?: Record<string, string> };
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.keys, ["ALPHA", "BETA"]);
+    assert.deepEqual(body.secrets, { ALPHA: "a", BETA: "b" });
+    // Bulk must not be a quieter path than N gets: one read record per key.
+    assert.equal(logs.filter((line) => line.includes('"action":"read"')).length, 2);
+    assert.equal(logs.some((line) => /leak-me|"value"/.test(line)), false);
+  } finally {
+    console.log = previousLog;
+    server.close();
+  }
+});
+
+test("?values=1 is refused for a read-only token scoped to another project", async () => {
+  const backend = memoryBackend([
+    { ref: { userId: "1", project: "other", env: "dev", key: "KEY" }, value: "secret" }
+  ]);
+  const server = createJuiceServer({
+    backend,
+    tokenSecret: TEST_SECRET,
+    revocationStore: new MemoryTokenRevocationStore()
+  });
+  const port = await listen(server);
+
+  try {
+    const scoped = signToken(
+      { sub: "github:1", scope: { project: "demo", env: "dev", actions: ["read"] } },
+      TEST_SECRET
+    );
+    const response = await fetch(`http://127.0.0.1:${port}/projects/other/envs/dev/secrets?values=1`, {
+      headers: { authorization: `Bearer ${scoped}` }
+    });
+    assert.equal(response.status, 403);
+    assert.equal(JSON.stringify(await response.json()).includes("secret"), false);
+  } finally {
+    server.close();
+  }
+});
+
 test("unset deletes with write authz; read-only machine token gets 403", async () => {
   const backend = memoryBackend([
     { ref: { userId: "1", project: "demo", env: "dev", key: "KEY" }, value: "secret" }

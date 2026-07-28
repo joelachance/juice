@@ -100,7 +100,7 @@ export function createJuiceServer(options: JuiceServerOptions = {}): Server {
         await handleSecretList(req, res, requestId, {
           project: decodeURIComponent(listMatch[1]),
           env: decodeURIComponent(listMatch[2])
-        }, backend, signingSecret, authorize, revocationStore, principalLimiter);
+        }, backend, signingSecret, authorize, revocationStore, principalLimiter, url.searchParams.get("values") === "1");
         return;
       }
 
@@ -202,7 +202,8 @@ async function handleSecretList(
   signingSecret: string,
   authorize: (request: AccessRequest) => boolean | Promise<boolean>,
   revocationStore: TokenRevocationStore,
-  principalLimiter: TokenBucketLimiter
+  principalLimiter: TokenBucketLimiter,
+  withValues = false
 ): Promise<void> {
   const action: TokenAction = "read";
   const auditAction: AuditAction = "list";
@@ -235,7 +236,24 @@ async function handleSecretList(
   // Tenant isolation: listKeys must only ever be called with the caller's userId.
   const keys = await backend.listKeys({ userId, project: refBase.project, env: refBase.env });
   auditSecretAccess({ requestId, principal: principal.sub, action: auditAction, ...refBase, outcome: "ok" });
-  sendJson(res, 200, { requestId, keys });
+
+  if (!withValues) {
+    sendJson(res, 200, { requestId, keys });
+    return;
+  }
+
+  // `?values=1` exists so `export` and `run` stop doing list-then-N-gets. It is
+  // not a weaker permission: it needs the same read action, and it still emits
+  // one audit record per key, so the log is byte-for-byte what N separate GETs
+  // would have produced. Only the round trips collapse.
+  const secrets: Record<string, string> = {};
+  for (const key of keys) {
+    const value = await backend.getSecret({ userId, ...refBase, key });
+    if (value === undefined) continue;
+    secrets[key] = value;
+    auditSecretAccess({ requestId, principal: principal.sub, action: "read", ...refBase, key, outcome: "ok" });
+  }
+  sendJson(res, 200, { requestId, keys, secrets });
 }
 
 async function authenticate(
