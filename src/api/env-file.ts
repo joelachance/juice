@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { readDotEnv } from "../local/dotenv.js";
 
@@ -64,7 +64,3 @@ export function loadServerEnvFile(options: LoadServerEnvOptions = {}): string[] 
   return applied;
 }
 
-/** Read a config file's raw text without touching process.env. Used by tests. */
-export function readServerEnvFile(file: string): string {
-  return readFileSync(file, "utf8");
-}
