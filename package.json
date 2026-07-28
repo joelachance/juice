@@ -22,7 +22,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
     "dev": "npm run build && node scripts/run-api-local.mjs",
     "cli": "npm run build && node dist/src/cli/main.js",
     "link": "npm run build && npm link",
