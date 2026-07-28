@@ -6,3 +6,6 @@ cdk.out/
 .juice/
 .DS_Store
 cdk.context.json
+
+# convex codegen (npx convex dev regenerates)
+convex/_generated/

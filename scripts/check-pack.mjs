@@ -19,13 +19,16 @@ const forbidden = files.filter((path) =>
   path.startsWith("dist/src/api/") ||
   path === "infra" ||
   path.startsWith("infra/") ||
+  path === "convex" ||
+  path.startsWith("convex/") ||
+  path === "convex/LICENSE" ||
   path.endsWith("/api/LICENSE") ||
   path === "src/api/LICENSE" ||
   path === "infra/LICENSE"
 );
 
 if (forbidden.length > 0) {
-  console.error("Published tarball must not include server/infra/AGPL paths:");
+  console.error("Published tarball must not include server/infra/convex/AGPL paths:");
   for (const path of forbidden) console.error(`- ${path}`);
   process.exit(1);
 }
