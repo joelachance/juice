@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { readDotEnv, removeDotEnvKey, serializeSecrets, setDotEnvValue, shQuote } from "../src/local/dotenv.js";
-import { JUICE_GITIGNORE_MARKER, ensureJuiceGitignore } from "../src/local/gitignore.js";
-import { hasEnvDrift, recordEnvFingerprint } from "../src/local/state.js";
 
 test("setDotEnvValue replaces in place and leaves no copy of the old value", () => {
   const dir = mkdtempSync(join(tmpdir(), "juice-local-"));
@@ -33,17 +31,6 @@ test("setDotEnvValue keeps position and neighbours when replacing", () => {
   assert.deepEqual(lines, ["FIRST=1", "TARGET=new", "LAST=3"]);
 });
 
-test("state fingerprint detects out-of-band .env edits", () => {
-  const dir = mkdtempSync(join(tmpdir(), "juice-state-"));
-  const envFile = join(dir, ".env");
-
-  writeFileSync(envFile, "A=1\n");
-  recordEnvFingerprint(dir, envFile);
-  assert.equal(hasEnvDrift(dir, envFile), false);
-
-  writeFileSync(envFile, "A=2\n");
-  assert.equal(hasEnvDrift(dir, envFile), true);
-});
 
 test("writers match indented key lines that the reader can see", () => {
   const dir = mkdtempSync(join(tmpdir(), "juice-indent-"));
@@ -129,23 +116,6 @@ test("removeDotEnvKey removes key and juice marker while leaving neighbors", () 
   assert.equal(removeDotEnvKey(envFile, "REMOVE"), false);
 });
 
-test("ensureJuiceGitignore appends once and is idempotent", () => {
-  const dir = mkdtempSync(join(tmpdir(), "juice-gitignore-"));
-  writeFileSync(join(dir, ".gitignore"), "node_modules/\n");
-
-  const first = ensureJuiceGitignore(dir);
-  assert.equal(first.added, true);
-  const once = readFileSync(join(dir, ".gitignore"), "utf8");
-  assert.match(once, new RegExp(JUICE_GITIGNORE_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.match(once, /^\.env$/m);
-  assert.match(once, /^\.env\.\*$/m);
-  assert.match(once, /^\.juice\/$/m);
-
-  const second = ensureJuiceGitignore(dir);
-  assert.equal(second.added, false);
-  assert.equal(readFileSync(join(dir, ".gitignore"), "utf8"), once);
-  assert.equal(existsSync(join(dir, ".gitignore")), true);
-});
 
 test("shQuote neutralises shell expansion so a sourced export cannot execute", () => {
   assert.equal(shQuote("plain"), "'plain'");

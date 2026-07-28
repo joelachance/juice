@@ -1,19 +1,18 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { emitKeypressEvents } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
-import { join } from "node:path";
-import { existsSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
 import { getToken, setToken } from "../auth/token-store.js";
-import { resolveProject, resolveJuiceEnv, isLocalMode } from "../config/project.js";
+import { resolveJuiceEnv, isLocalMode } from "../config/project.js";
+import { MISSING_SCOPE_MESSAGE, readKnownScopes, rememberScope, resolveScope } from "../config/scope.js";
 import { apiBase, requestJson } from "../http/client.js";
-import { loadJuiceEnv } from "../local/bootstrap-env.js";
-import { setDotEnvValue, readDotEnv, removeDotEnvKey } from "../local/dotenv.js";
-import { ensureJuiceGitignore } from "../local/gitignore.js";
-import { hasEnvDrift, recordEnvFingerprint } from "../local/state.js";
+import { readDotEnv, removeDotEnvKey, setDotEnvValue, type ExportFormat } from "../local/dotenv.js";
+import { enclosingGitRepo, writeSecretsFile } from "../local/export.js";
+import { ensureStoreDir, storePath } from "../local/store.js";
+import { pickScope } from "./pick-scope.js";
 
 export const juiceLogoRaw = String.raw`       __
       / /_  __(_)_______
@@ -24,12 +23,23 @@ export const juiceLogoRaw = String.raw`       __
 const juiceTagline = "agent secrets without copy/paste";
 const LOGIN_DEFAULT_EXPIRES_SECONDS = 15 * 60;
 
+/** Commands whose first positional after the command name is a secret key. */
+const KEY_COMMANDS = new Set(["set", "get", "unset"]);
+
+/** Flags that consume the next argv entry, so positionals can be counted. */
+const VALUE_FLAGS = new Set(["--scope", "--project", "--env", "--to", "--format", "--ttl"]);
+
 type Args = {
   command?: string;
   subcommand?: string;
   key?: string;
-  project?: string;
+  positionals: string[];
+  scopes: string[];
   env?: string;
+  to?: string;
+  format: ExportFormat;
+  force: boolean;
+  stdin: boolean;
   ttlSeconds?: number;
   readOnly: boolean;
   jti?: string;
@@ -37,11 +47,20 @@ type Args = {
   local: boolean;
   yes: boolean;
   help: boolean;
-  runCommand: string[];
+};
+
+type Context = {
+  env: NodeJS.ProcessEnv;
+  scope: string;
+  envName: string;
+  mode: "local" | "remote";
+  file: string;
 };
 
 export async function runCli(argv = process.argv.slice(2)): Promise<number> {
-  loadJuiceEnv();
+  // Deliberately does not bootstrap from `.env`. Juice's control plane reads
+  // the real environment and flags only, so no file in a repository can change
+  // which scope, env, or mode a command runs against.
   const args = parseArgs(argv);
   if (args.help || !args.command || args.command === "help") {
     console.log(rootHelpText());
@@ -52,34 +71,31 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     return 1;
   }
   if (args.command === "auth" && args.subcommand === "login") {
-    warnIfDrift(args);
     await login();
     return 0;
   }
-  if (args.command === "init") {
-    return initProject(args);
+  if (args.command === "scopes") {
+    return listScopes(args);
   }
   if (args.command === "set" && args.key) {
-    warnIfDrift(args);
-    await setSecret(args.key, args);
-    return 0;
+    if (args.positionals.length > 2) {
+      console.error(valueAsArgumentError(args.key));
+      return 1;
+    }
+    return await setSecret(args.key, args);
   }
-  if (args.command === "get" && args.key) {
-    warnIfDrift(args);
-    return getSecret(args.key, args);
+  if (args.command === "get" && args.key) return getSecret(args.key, args);
+  if (args.command === "list") return listSecrets(args);
+  if (args.command === "unset" && args.key) return unsetSecret(args.key, args);
+  // A key-taking command with no key: say which argument is missing rather
+  // than dumping the whole help screen and leaving the reader to diff it.
+  if (args.command && KEY_COMMANDS.has(args.command)) {
+    console.error(`\`juice ${args.command}\` needs a KEY.`);
+    console.error("");
+    console.error(`  juice ${args.command} MY_KEY --scope <name>${args.command === "set" ? " --stdin" : ""}`);
+    return 1;
   }
-  if (args.command === "list") {
-    warnIfDrift(args);
-    return listSecrets(args);
-  }
-  if (args.command === "unset" && args.key) {
-    warnIfDrift(args);
-    return unsetSecret(args.key, args);
-  }
-  if (args.command === "run") {
-    warnIfDrift(args);
-    return runWithSecrets(args);
-  }
+  if (args.command === "export") return exportSecrets(args);
   if (args.command === "token" && args.subcommand === "create") {
     await createMachineToken(args);
     return 0;
@@ -92,30 +108,59 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
   return 1;
 }
 
-function parseArgs(argv: string[]): Args {
-  const dashIndex = argv.indexOf("--");
-  const flagArgv = dashIndex >= 0 ? argv.slice(0, dashIndex) : argv;
-  const runCommand = dashIndex >= 0 ? argv.slice(dashIndex + 1) : [];
-  const command = flagArgv[0];
-  const keyCommands = new Set(["set", "get", "unset"]);
+function parseArgs(flagArgv: string[]): Args {
+  const positionals = positionalArgs(flagArgv);
+  // The command comes from positionals too, so a leading flag does not become
+  // the command: `juice --local set K` used to parse its command as "--local".
+  const command = positionals[0];
+
+  // Defaults to `sh`, not `dotenv`. `export` exists for files that get sourced,
+  // and the dotenv writer double-quotes — under `source` the shell still
+  // expands `$(…)` and backticks inside double quotes. The unsafe format has to
+  // be the one you opt into, not the one you get by forgetting a flag.
+  const format = flagValue(flagArgv, "--format") ?? "sh";
+  if (format !== "dotenv" && format !== "sh") {
+    throw new Error(`Invalid --format: ${format} (expected "dotenv" or "sh")`);
+  }
   return {
     command,
-    subcommand: flagArgv[1],
-    key: command && keyCommands.has(command) ? flagArgv[1] : undefined,
-    project: flagValue(flagArgv, "--project"),
+    // From positionals, not argv[1]: `juice unset --yes MYKEY` used to take
+    // "--yes" as the key, report "--yes is not set." and exit 0.
+    subcommand: positionals[1],
+    key: command && KEY_COMMANDS.has(command) ? positionals[1] : undefined,
+    positionals,
+    // --project is the old spelling of --scope; a scope *is* the project string.
+    scopes: [...flagValues(flagArgv, "--scope"), ...flagValues(flagArgv, "--project")],
     env: flagValue(flagArgv, "--env"),
+    to: flagValue(flagArgv, "--to"),
+    format,
+    force: flagArgv.includes("--force"),
+    stdin: flagArgv.includes("--stdin"),
     ttlSeconds: parseTtl(flagValue(flagArgv, "--ttl")),
     readOnly: flagArgv.includes("--read-only"),
-    jti: command === "token" && flagArgv[1] === "revoke" ? flagArgv[2] : undefined,
+    jti: command === "token" && positionals[1] === "revoke" ? positionals[2] : undefined,
     remote: flagArgv.includes("--remote"),
     local: flagArgv.includes("--local"),
     yes: flagArgv.includes("--yes") || flagArgv.includes("-y"),
-    help: flagArgv.includes("--help") || flagArgv.includes("-h"),
-    runCommand
+    help: flagArgv.includes("--help") || flagArgv.includes("-h")
   };
 }
 
-function resolveSecretMode(args: Args, env: NodeJS.ProcessEnv = process.env): "local" | "remote" {
+function positionalArgs(argv: string[]): string[] {
+  const out: string[] = [];
+  for (let index = 0; index < argv.length; index++) {
+    const entry = argv[index];
+    if (VALUE_FLAGS.has(entry)) {
+      index++;
+      continue;
+    }
+    if (entry.startsWith("-")) continue;
+    out.push(entry);
+  }
+  return out;
+}
+
+function resolveSecretMode(args: Args, env: NodeJS.ProcessEnv): "local" | "remote" {
   if (args.remote) return "remote";
   if (args.local) return "local";
   return isLocalMode(env) ? "local" : "remote";
@@ -123,7 +168,6 @@ function resolveSecretMode(args: Args, env: NodeJS.ProcessEnv = process.env): "l
 
 function envWithOverrides(args: Args): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  if (args.project) env.JUICE_PROJECT = args.project;
   if (args.env) env.JUICE_ENV = args.env;
   if (args.remote) env.JUICE_REMOTE = "1";
   if (args.local) {
@@ -131,6 +175,35 @@ function envWithOverrides(args: Args): NodeJS.ProcessEnv {
     if (!args.env && !env.JUICE_ENV) env.JUICE_ENV = "development";
   }
   return env;
+}
+
+/**
+ * Everything a secret command needs. Prompts for a scope when one was not
+ * supplied and a human is present; errors otherwise. Never guesses.
+ */
+async function resolveContext(args: Args, scopeOverride?: string): Promise<Context> {
+  const env = envWithOverrides(args);
+  const resolved = resolveScope(env, scopeOverride ?? args.scopes[0]);
+  const scope = resolved?.scope ?? await pickScope(env);
+  const envName = args.env || resolveJuiceEnv(env);
+  rememberScope(scope, env);
+  return {
+    env,
+    scope,
+    envName,
+    mode: resolveSecretMode(args, env),
+    file: storePath(scope, envName, env)
+  };
+}
+
+function secretsPath(ctx: Context): string {
+  return `/projects/${encodeURIComponent(ctx.scope)}/envs/${encodeURIComponent(ctx.envName)}/secrets`;
+}
+
+function requireToken(ctx: Context, verb: string): string {
+  const token = getToken(ctx.env);
+  if (!token) throw new Error(`Run \`juice auth login\` or set JUICE_TOKEN before ${verb} remote secrets.`);
+  return token;
 }
 
 async function login(): Promise<void> {
@@ -170,92 +243,63 @@ async function login(): Promise<void> {
   throw new Error("Device code expired. Run `juice auth login` again.");
 }
 
-function initProject(args: Args): number {
+// ── scopes ───────────────────────────────────────────────────────────────────
+
+function listScopes(args: Args): number {
   const env = envWithOverrides(args);
-  const { root } = resolveProject(process.cwd(), env);
-  const gitignore = ensureJuiceGitignore(root);
-  const envFile = join(root, ".env");
-  let createdEnv = false;
-  if (!existsSync(envFile)) {
-    writeFileSync(envFile, "", { encoding: "utf8", mode: 0o600 });
-    createdEnv = true;
+  const known = readKnownScopes(env);
+  if (known.length === 0) {
+    console.error("No scopes used yet on this machine. `juice set KEY --scope <name>` creates one.");
+    return 0;
   }
-  recordEnvFingerprint(root, envFile);
-
-  if (gitignore.added) console.log("Added juice block to .gitignore.");
-  else console.log(".gitignore already has the juice block.");
-  if (createdEnv) console.log("Created .env (mode 0600).");
-  else console.log(".env already exists.");
-
-  console.log("");
-  console.log("Model: call juice.get(\"KEY\") — local .env in development, remote API otherwise.");
-  console.log("Same call site; Juice picks the source from JUICE_ENV / APP_ENV / NODE_ENV / JUICE_REMOTE.");
-  console.log("Next: juice set KEY");
+  for (const scope of known) console.log(scope);
   return 0;
 }
 
-async function setSecret(key: string, args: Args): Promise<void> {
-  const value = await promptSecret(`Value for ${key}: `);
-  const env = envWithOverrides(args);
-  const mode = resolveSecretMode(args, env);
-  const { project, root } = resolveProject(process.cwd(), env);
-  const envName = args.env || resolveJuiceEnv(env);
+// ── secrets ──────────────────────────────────────────────────────────────────
 
-  ensureGitignoreForSet(root);
+async function setSecret(key: string, args: Args): Promise<number> {
+  const ctx = await resolveContext(args);
+  const value = args.stdin
+    ? stripOneTrailingNewline(await readAllStdin())
+    : await promptSecret(`Value for ${key}: `);
 
-  if (mode === "remote") {
-    const token = getToken(env);
-    if (!token) throw new Error("Run `juice auth login` or set JUICE_TOKEN before writing remote secrets.");
-    const path = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets/${encodeURIComponent(key)}`;
-    await requestJson(`${apiBase(env)}${path}`, {
+  if (ctx.mode === "remote") {
+    const token = requireToken(ctx, "writing");
+    await requestJson(`${apiBase(ctx.env)}${secretsPath(ctx)}/${encodeURIComponent(key)}`, {
       method: "PUT",
       token,
       body: JSON.stringify({ value })
     });
-    console.log(`Stored ${key} remotely for ${project}/${envName}.`);
-    return;
+    console.log(`Stored ${key} in ${ctx.scope} (${ctx.envName}, remote).`);
+    return 0;
   }
 
-  const envFile = join(root, ".env");
-  setDotEnvValue(envFile, key, value, envName);
-  recordEnvFingerprint(root, envFile);
-  console.log(`Appended ${key} to .env.`);
-}
-
-function ensureGitignoreForSet(root: string): void {
-  const result = ensureJuiceGitignore(root);
-  if (result.added) {
-    console.log("Added .env / .juice/ to .gitignore.");
-  }
+  ensureStoreDir(ctx.file);
+  setDotEnvValue(ctx.file, key, value, ctx.envName);
+  console.log(`Stored ${key} in ${ctx.scope} (${ctx.envName}).`);
+  return 0;
 }
 
 async function getSecret(key: string, args: Args): Promise<number> {
-  const env = envWithOverrides(args);
-  const mode = resolveSecretMode(args, env);
-  const { project, root } = resolveProject(process.cwd(), env);
-  const envName = args.env || resolveJuiceEnv(env);
+  const ctx = await resolveContext(args);
 
-  if (mode === "local") {
-    const value = readDotEnv(join(root, ".env"))[key];
+  if (ctx.mode === "local") {
+    const value = readDotEnv(ctx.file)[key];
     if (value === undefined) {
-      console.error(`Missing local secret: ${key}`);
+      console.error(`Missing secret ${key} in ${ctx.scope} (${ctx.envName}).`);
       return 1;
     }
     console.log(value);
     return 0;
   }
 
-  const token = getToken(env);
-  if (!token) {
-    console.error("Run `juice auth login` or set JUICE_TOKEN before reading remote secrets.");
-    return 1;
-  }
-  const path = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets/${encodeURIComponent(key)}`;
   try {
-    const response = await requestJson<{ value: string }>(`${apiBase(env)}${path}`, {
-      method: "GET",
-      token
-    });
+    const token = requireToken(ctx, "reading");
+    const response = await requestJson<{ value: string }>(
+      `${apiBase(ctx.env)}${secretsPath(ctx)}/${encodeURIComponent(key)}`,
+      { method: "GET", token }
+    );
     console.log(response.value);
     return 0;
   } catch (error) {
@@ -265,25 +309,16 @@ async function getSecret(key: string, args: Args): Promise<number> {
 }
 
 async function listSecrets(args: Args): Promise<number> {
-  const env = envWithOverrides(args);
-  const mode = resolveSecretMode(args, env);
-  const { project, root } = resolveProject(process.cwd(), env);
-  const envName = args.env || resolveJuiceEnv(env);
+  const ctx = await resolveContext(args);
 
-  if (mode === "local") {
-    const keys = Object.keys(readDotEnv(join(root, ".env"))).sort();
-    for (const key of keys) console.log(key);
+  if (ctx.mode === "local") {
+    for (const key of Object.keys(readDotEnv(ctx.file)).sort()) console.log(key);
     return 0;
   }
 
-  const token = getToken(env);
-  if (!token) {
-    console.error("Run `juice auth login` or set JUICE_TOKEN before listing remote secrets.");
-    return 1;
-  }
   try {
-    const path = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets`;
-    const response = await requestJson<{ keys: string[] }>(`${apiBase(env)}${path}`, {
+    const token = requireToken(ctx, "listing");
+    const response = await requestJson<{ keys: string[] }>(`${apiBase(ctx.env)}${secretsPath(ctx)}`, {
       method: "GET",
       token
     });
@@ -296,40 +331,32 @@ async function listSecrets(args: Args): Promise<number> {
 }
 
 async function unsetSecret(key: string, args: Args): Promise<number> {
-  const env = envWithOverrides(args);
-  const mode = resolveSecretMode(args, env);
-  const { project, root } = resolveProject(process.cwd(), env);
-  const envName = args.env || resolveJuiceEnv(env);
+  const ctx = await resolveContext(args);
 
-  if (mode === "local") {
-    const envFile = join(root, ".env");
-    const existing = readDotEnv(envFile);
-    if (!(key in existing)) {
-      console.log(`${key} is not set.`);
+  if (ctx.mode === "local") {
+    if (!(key in readDotEnv(ctx.file))) {
+      console.log(`${key} is not set in ${ctx.scope} (${ctx.envName}).`);
       return 0;
     }
-    if (!(await confirm(`Unset ${key} from .env?`, args.yes))) {
+    if (!(await confirm(`Unset ${key} from ${ctx.scope} (${ctx.envName})?`, args.yes))) {
       console.error("Cancelled.");
       return 1;
     }
-    removeDotEnvKey(envFile, key);
-    recordEnvFingerprint(root, envFile);
+    if (!removeDotEnvKey(ctx.file, key)) {
+      console.error(`Could not remove ${key} from ${displayPath(ctx.file)}.`);
+      return 1;
+    }
     console.log(`Unset ${key}.`);
     return 0;
   }
 
-  const token = getToken(env);
-  if (!token) {
-    console.error("Run `juice auth login` or set JUICE_TOKEN before unsetting remote secrets.");
-    return 1;
-  }
-  if (!(await confirm(`Unset remote secret ${key} for ${project}/${envName}?`, args.yes))) {
-    console.error("Cancelled.");
-    return 1;
-  }
   try {
-    const path = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets/${encodeURIComponent(key)}`;
-    await requestJson(`${apiBase(env)}${path}`, {
+    const token = requireToken(ctx, "unsetting");
+    if (!(await confirm(`Unset remote secret ${key} for ${ctx.scope} (${ctx.envName})?`, args.yes))) {
+      console.error("Cancelled.");
+      return 1;
+    }
+    await requestJson(`${apiBase(ctx.env)}${secretsPath(ctx)}/${encodeURIComponent(key)}`, {
       method: "DELETE",
       token
     });
@@ -341,88 +368,103 @@ async function unsetSecret(key: string, args: Args): Promise<number> {
   }
 }
 
-async function runWithSecrets(args: Args): Promise<number> {
-  if (args.runCommand.length === 0) {
-    console.error("Usage: juice run -- <cmd> [args…]");
-    return 1;
-  }
-  const env = envWithOverrides(args);
-  const mode = resolveSecretMode(args, env);
-  const { project, root } = resolveProject(process.cwd(), env);
-  const envName = args.env || resolveJuiceEnv(env);
-  const childEnv = { ...env };
-  const originalKeys = new Set(Object.keys(env));
-
-  if (mode === "local") {
-    for (const [key, value] of Object.entries(readDotEnv(join(root, ".env")))) {
-      if (key.startsWith("JUICE_")) continue;
-      if (!originalKeys.has(key)) childEnv[key] = value;
-    }
-  } else {
-    const token = getToken(env);
-    if (!token) {
-      console.error("Run `juice auth login` or set JUICE_TOKEN before running with remote secrets.");
-      return 1;
-    }
-    try {
-      const listPath = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets`;
-      const listed = await requestJson<{ keys: string[] }>(`${apiBase(env)}${listPath}`, {
-        method: "GET",
-        token
-      });
-      for (const key of listed.keys) {
-        if (key.startsWith("JUICE_")) continue;
-        if (originalKeys.has(key)) continue;
-        const getPath = `/projects/${encodeURIComponent(project)}/envs/${encodeURIComponent(envName)}/secrets/${encodeURIComponent(key)}`;
-        const response = await requestJson<{ value: string }>(`${apiBase(env)}${getPath}`, {
-          method: "GET",
-          token
-        });
-        childEnv[key] = response.value;
-      }
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      return 1;
-    }
-  }
-
-  const [command, ...commandArgs] = args.runCommand;
-  return await new Promise<number>((resolvePromise) => {
-    const child = spawn(command, commandArgs, {
-      env: childEnv,
-      stdio: "inherit"
-    });
-    child.on("error", (error) => {
-      console.error(error.message);
-      resolvePromise(1);
-    });
-    child.on("exit", (code, signal) => {
-      if (signal) {
-        resolvePromise(1);
-        return;
-      }
-      resolvePromise(code ?? 1);
-    });
+/**
+ * One request instead of list-then-N-gets, falling back when the server has no
+ * `?values=1` — a self-hosted deployment can be older than this client, and
+ * silently returning zero secrets would be worse than being slow.
+ */
+async function fetchAllRemote(ctx: Context): Promise<Record<string, string>> {
+  const token = requireToken(ctx, "reading");
+  const base = `${apiBase(ctx.env)}${secretsPath(ctx)}`;
+  const bulk = await requestJson<{ keys: string[]; secrets?: Record<string, string> }>(`${base}?values=1`, {
+    method: "GET",
+    token
   });
+  if (bulk.secrets) return bulk.secrets;
+
+  const values: Record<string, string> = Object.create(null);
+  for (const key of bulk.keys) {
+    const response = await requestJson<{ value: string }>(`${base}/${encodeURIComponent(key)}`, {
+      method: "GET",
+      token
+    });
+    values[key] = response.value;
+  }
+  return values;
 }
 
+async function readScope(ctx: Context): Promise<Record<string, string>> {
+  return ctx.mode === "local" ? readDotEnv(ctx.file) : await fetchAllRemote(ctx);
+}
+
+async function exportSecrets(args: Args): Promise<number> {
+  if (!args.to) {
+    console.error("Usage: juice export --to <path> --scope <name>… [--format sh|dotenv]");
+    console.error("There is no --json / stdout form on purpose: a printed secret is a logged secret.");
+    return 1;
+  }
+
+  const target = resolve(args.to);
+  const repo = enclosingGitRepo(dirname(target));
+  if (repo && !args.force) {
+    console.error(`${displayPath(target)} is inside a git repository (${displayPath(repo)}).`);
+    console.error("Anything working in that repo can commit and push it. Pass --force to override.");
+    return 1;
+  }
+
+  const merged: Record<string, string> = Object.create(null);
+  const summary: Array<{ scope: string; keys: string[] }> = [];
+  try {
+    // No --scope: resolveContext prompts (or errors when non-interactive).
+    for (const scopeName of args.scopes.length > 0 ? args.scopes : [undefined]) {
+      const ctx = await resolveContext(args, scopeName);
+      const values = await readScope(ctx);
+      const keys: string[] = [];
+      for (const [key, value] of Object.entries(values)) {
+        if (key.startsWith("JUICE_")) continue;
+        merged[key] = value; // later scopes win
+        keys.push(key);
+      }
+      summary.push({ scope: ctx.scope, keys: keys.sort() });
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+
+  if (args.format === "dotenv") {
+    const risky = Object.keys(merged).filter((key) => /[$`\\]/.test(merged[key])).sort();
+    if (risky.length > 0) {
+      console.error("warning: dotenv format double-quotes, so this file is NOT safe to `source`.");
+      console.error(`         ${risky.join(", ")} contain shell metacharacters. Use --format sh if anything sources it.`);
+    }
+  }
+
+  const result = writeSecretsFile(target, merged, args.format);
+  console.error(`wrote ${result.keys.length} key${result.keys.length === 1 ? "" : "s"} → ${displayPath(result.path)} (0600, ${args.format})`);
+  for (const entry of summary) {
+    console.error(`  ${entry.scope}  ${entry.keys.length > 0 ? entry.keys.join(", ") : "(empty)"}`);
+  }
+  if (summary.length > 1) console.error("  later scopes win on conflict");
+  return 0;
+}
+
+// ── tokens ───────────────────────────────────────────────────────────────────
+
 async function createMachineToken(args: Args): Promise<void> {
-  const env = envWithOverrides(args);
-  const token = getToken(env);
-  if (!token) throw new Error("Run `juice auth login` or set JUICE_TOKEN before creating machine tokens.");
-  const project = args.project || resolveProject(process.cwd(), env).project;
-  const envName = args.env || resolveJuiceEnv(env);
+  const ctx = await resolveContext(args);
+  const token = requireToken(ctx, "creating machine tokens for");
   const created = await requestJson<{
     token: string;
     jti: string;
     expiresIn: number;
     scope: { project: string; env: string; actions: string[] };
-  }>(`${apiBase(env)}/tokens`, {
+  }>(`${apiBase(ctx.env)}/tokens`, {
     method: "POST",
     token,
     body: JSON.stringify({
-      project,
-      env: envName,
+      project: ctx.scope,
+      env: ctx.envName,
       readOnly: args.readOnly,
       ttlSeconds: args.ttlSeconds
     })
@@ -448,13 +490,36 @@ async function revokeToken(target: string | undefined): Promise<void> {
   console.log(`Revoked token ${targetJti}.`);
 }
 
-function warnIfDrift(args: Args): void {
-  const env = envWithOverrides(args);
-  const { root } = resolveProject(process.cwd(), env);
-  const envFile = join(root, ".env");
-  if (hasEnvDrift(root, envFile)) {
-    console.warn(".env changed outside Juice. Use juice set KEY to add or update secrets.");
-  }
+// ── plumbing ─────────────────────────────────────────────────────────────────
+
+function valueAsArgumentError(key: string): string {
+  return [
+    "A secret value cannot be an argument — it lands in `ps` and in shell history,",
+    "and deleting it later does not help.",
+    "",
+    `  interactive   juice set ${key} --scope <name>`,
+    `  scripted      printf %s "$VALUE" | juice set ${key} --scope <name> --stdin`
+  ].join("\n");
+}
+
+function stripOneTrailingNewline(value: string): string {
+  return value.replace(/\r?\n$/, "");
+}
+
+async function readAllStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of input) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** `~`-relative where possible; absolute paths in output are noise. */
+export function displayPath(path: string, home = homedir()): string {
+  const absolute = resolve(path);
+  const fromCwd = relative(process.cwd(), absolute);
+  if (fromCwd && !fromCwd.startsWith("..")) return fromCwd;
+  const fromHome = relative(home, absolute);
+  if (fromHome && !fromHome.startsWith("..")) return join("~", fromHome);
+  return absolute;
 }
 
 async function confirm(message: string, yes: boolean): Promise<boolean> {
@@ -472,17 +537,17 @@ async function confirm(message: string, yes: boolean): Promise<boolean> {
 }
 
 async function promptSecret(prompt: string): Promise<string> {
-  if (input.isTTY && typeof input.setRawMode === "function") {
-    return hiddenPrompt(prompt);
+  // Without a TTY there is nothing to prompt. Falling back to readline here
+  // meant `juice set KEY < /dev/null` printed the prompt, never resolved, and
+  // let node exit 0 with nothing stored — success reported for a lost secret.
+  if (!input.isTTY || typeof input.setRawMode !== "function") {
+    throw new Error("No terminal to read a secret from. Pipe the value instead: printf %s \"$VALUE\" | juice set KEY --scope <name> --stdin");
   }
-  const rl = createInterface({ input, output });
-  const value = await rl.question(prompt);
-  rl.close();
-  return value;
+  return hiddenPrompt(prompt);
 }
 
 function hiddenPrompt(prompt: string): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolvePrompt, reject) => {
     let value = "";
     output.write(prompt);
     emitKeypressEvents(input);
@@ -503,7 +568,7 @@ function hiddenPrompt(prompt: string): Promise<string> {
       }
       if (key.name === "return" || key.name === "enter") {
         cleanup();
-        resolve(value);
+        resolvePrompt(value);
         return;
       }
       if (key.name === "backspace") {
@@ -527,18 +592,18 @@ ${authLine}
 $ juice help
 
 Usage:
-  juice [command]
+  juice [command] --scope <name>
 
 Setup:
   auth login Authenticate with Juice
-  init       Scaffold .gitignore + .env for local secrets
+  scopes     List scopes used on this machine
 
 Secrets:
-  set KEY    Add a secret (local .env or --remote)
-  get KEY    Print one secret value to stdout
+  set KEY    Add or replace a secret (prompt, or --stdin)
   list       List secret key names (never values)
   unset KEY  Remove a secret
-  run --     Run a command with secrets injected
+  export     Write every key in a scope to a file
+  get KEY    Print one value to stdout (debugging; apps use the SDK)
 
 Tokens:
   token create   Create a scoped machine token
@@ -548,26 +613,66 @@ Help:
   help       Help screen
 
 Flags:
-  --local          Force local .env mode
-  --remote         Force remote API mode
-  --project NAME   Override project
-  --env NAME       Override environment name
+  --scope NAME     Which scope to act on (repeatable on export)
+  --env NAME       Environment: development (default), staging, production…
+  --local          Force the local store
+  --remote         Force the remote API
+  --stdin          Read the value for \`set\` from stdin
+  --to PATH        Destination for \`export\`
+  --format FMT     \`export\` format: sh (default) or dotenv
+  --force          Let \`export\` write inside a git repository
   --yes, -y        Skip confirmation prompts
   -h, --help       help for juice
 
-Mode: JUICE_ENV → APP_ENV → NODE_ENV → development; JUICE_REMOTE=1 forces remote.
---remote and --local are mutually exclusive.
+Scope is never inferred. Pass --scope or set JUICE_SCOPE; run interactively and
+Juice offers the scopes you have used before. Without either, it is an error.
 
-Use "juice [command] --help" for more information about a command.`;
+Secrets live in ~/.juice/scopes/<scope>/<env>.env for development, and in the
+Juice API for every other env. Reading in an app is the SDK's job:
+
+  const secrets = juice.scope("my-scope");
+  await secrets.get("MY_KEY");
+
+Mode: JUICE_ENV → APP_ENV → NODE_ENV → development; JUICE_REMOTE=1 forces remote.
+--remote and --local are mutually exclusive.`;
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
 function flagValue(argv: string[], flag: string): string | undefined {
   const index = argv.indexOf(flag);
-  return index >= 0 ? argv[index + 1] : undefined;
+  if (index < 0) return undefined;
+  const value = argv[index + 1];
+  // A flag that names a destination must not quietly become "use the default
+  // destination" when its value goes missing.
+  if (value === undefined || value.trim() === "" || value.startsWith("--")) {
+    throw new Error(`${flag} needs a value${value?.startsWith("--") ? `, but got the flag ${value}` : ""}.`);
+  }
+  return value;
+}
+
+/**
+ * Repeated flag values, strict about a missing or empty one. Silently dropping
+ * `--scope ""` would put secrets somewhere other than where they were asked to
+ * go, and `--scope "$VAR"` with VAR unset is the everyday way to produce it.
+ */
+function flagValues(argv: string[], flag: string): string[] {
+  const out: string[] = [];
+  for (let index = 0; index < argv.length; index++) {
+    if (argv[index] !== flag) continue;
+    const value = argv[index + 1];
+    if (value === undefined || value.trim() === "") {
+      throw new Error(`${flag} needs a value.`);
+    }
+    if (value.startsWith("--")) {
+      throw new Error(`${flag} needs a value, but got the flag ${value}.`);
+    }
+    out.push(value);
+    index++;
+  }
+  return out;
 }
 
 function parseTtl(value: string | undefined): number | undefined {
