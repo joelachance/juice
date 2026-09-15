@@ -48,7 +48,7 @@
     "aws-cdk-lib": "^2.261.0",
     "constructs": "^10.6.0",
     "convex": "^1.17.0",
-    "typescript": "^5.7.3"
+    "typescript": "^7.0.2"
   },
   "engines": {
     "node": ">=20"
