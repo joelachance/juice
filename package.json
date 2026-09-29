@@ -40,7 +40,7 @@
     "cdk:deploy": "cdk deploy"
   },
   "dependencies": {
-    "@aws-sdk/client-secrets-manager": "^3.840.0"
+    "@aws-sdk/client-secrets-manager": "^3.1141.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.5",
