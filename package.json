@@ -43,7 +43,7 @@
     "@aws-sdk/client-secrets-manager": "^3.840.0"
   },
   "devDependencies": {
-    "@types/node": "^22.13.5",
+    "@types/node": "^26.6.4",
     "aws-cdk": "^2.1129.0",
     "aws-cdk-lib": "^2.261.0",
     "constructs": "^10.6.0",
